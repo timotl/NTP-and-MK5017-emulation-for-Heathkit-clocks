@@ -1,5 +1,7 @@
 # Heathkit-GC-1092D
 Documentation and modification of original clock to use ESP32 module instead of MK5017. 
-Completely reversible - no permanent changes to circuit.
-Includes schematic for interface board and INO code.
+Uses original chip socket and only requires 5v power module 
+No changes to the original hardware
+Includes schematic and PCB for interface board
+Full code and description of function
 Documentation of the MK5017 
