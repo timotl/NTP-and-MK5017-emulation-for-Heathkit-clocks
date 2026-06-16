@@ -48,6 +48,17 @@ Partition scheme "Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS) required if S
 #include "driver/rmt.h"
 #include "driver/gpio.h"
 
+// Wifi stuff
+// Wifi will revert to setup AP mode if no connection available
+// OTA mode is triggered and runs in AP mode with timeout
+WiFiManager wifiManager;
+String wifihostname = "Heathkit-Clock";        // Hostname of ESP device
+String wifisetupssid = "Heathkit-Clock Setup"; // Setup AP mode SSID - no password
+String wifiotassid = "Heathkit-OTA";           // OTA AP mode SSID
+String wifiotapass = "update123";              // OTA AP mode password
+bool CP_Changes = 0;
+bool UseCPStartup;
+
 // === Global variables and constants ===
 int ntpinterval = 500;                        // NTP update interval
 ezDebugLevel_t ntpdebug = INFO;               // ezTime debug level
@@ -56,6 +67,16 @@ int BatteryBackup = 6;           // Hours to consider 'Battery backup' valid
 int showdatesec = 10;             // Seconds to show date when touched
 #define USE_BT 0   // Master switch for BluetoothSerial -- Requires partition scheme "Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS)"
 
+
+// BT stuff
+#if USE_BT
+#include "BluetoothSerial.h"
+BluetoothSerial SerialBT;
+#define Serial SerialBT
+#define STOP_BT() SerialBT.end()
+#else
+#define STOP_BT()
+#endif
 
 // Time of day and day of week blanking - only for WIFI mode
 // 7:30a - 6p M-F
@@ -73,26 +94,6 @@ char blankingBuf[4] = "0";
 constexpr const char *DEFAULT_TIMEZONE_POSIX = "MST7MDT,M3.2.0/2,M11.1.0/2"; // America/Denver timezone definition including DST On/Off
 String localTzPosix = DEFAULT_TIMEZONE_POSIX;
 Timezone tz;
-
-// Wifi stuff
-// Wifi will revert to setup AP mode if no connection available
-// OTA mode is triggered and runs in AP mode with timeout
-WiFiManager wifiManager;
-String wifihostname = "Heathkit-Clock";        // Hostname of ESP device
-String wifisetupssid = "Heathkit-Clock Setup"; // Setup AP mode SSID - no password
-String wifiotassid = "Heathkit-OTA";           // OTA AP mode SSID
-String wifiotapass = "update123";              // OTA AP mode password
-bool CP_Changes = 0;
-bool UseCPStartup;
-// BT stuff
-#if USE_BT
-#include "BluetoothSerial.h"
-BluetoothSerial SerialBT;
-#define Serial SerialBT
-#define STOP_BT() SerialBT.end()
-#else
-#define STOP_BT()
-#endif
 
 // Pin definitions
 const uint8_t pinData = 13;  // shift register data
@@ -243,7 +244,7 @@ const uint8_t messagearray[MESSAGE_COUNT][NUM_DIGITS] = {
 int messageindex = 7; // default to eights
 
 constexpr Emulation defaultEmulation = WIFI;
-constexpr Model defaultModel = MODEL_GC_1005;
+constexpr Model defaultModel = MODEL_BOGUS;
 Emulation clockemulation = defaultEmulation;
 Model clockmodel = defaultModel;
 
@@ -1245,6 +1246,8 @@ void savePrefs(Emulation emu, Model model)
 {
     clockemulation = emu;
     clockmodel = model;
+    prefs.putUChar("clockemulation", static_cast<uint8_t>(emu));
+    prefs.putUChar("clockmodel", static_cast<uint8_t>(model));
     
 }
 
@@ -1407,7 +1410,6 @@ void setupConfigInit()
         currentDisplayMode = MODE_MESSAGE;
         messageindex = 8; // dashes
         updateDisplayValue();
-        wifiManager.resetSettings();
         delay(2000);
         ESP.restart();
         delay(1000);
