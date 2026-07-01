@@ -38,3 +38,6 @@ Toggle TimeSet switch 3x in under 5 seconds will restart to portal to adjust set
 
 Select ESP32-WROOM-DA Module in Arduino IDE
 Partition scheme "Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS) required if SerialBT is enabled
+
+
+Also includes Manuals and other datasheets for the various models I can find.
