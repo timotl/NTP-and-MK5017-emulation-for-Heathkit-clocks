@@ -1,4 +1,22 @@
 /*
+Project: MK5017 Replacement
+Description: ESP32 sketch to replace MK5017 used in several HeathKit clocks
+Author: Landon Timothy
+Date: 6.30.2026
+
+License: MIT License
+Copyright (c) 2026 Landon Timothy
+
+Both the software code in this repository and the accompanying 
+hardware design files are open-source. 
+
+Permission is hereby granted, free of charge, to any person obtaining 
+a copy of this software and associated documentation files, to deal 
+in the Software and hardware designs without restriction, including 
+without limitation the rights to use, copy, modify, merge, publish, 
+distribute, sublicense, and/or sell copies.
+====================================================================
+
 ESP32 sketch to replace MK5017 used in several HeathKit clocks
 Requires shift register and level shifting interface which connects to the original board via chip socket
 No modifications to the original clock except adding a 5v power supply module at the 120v input line
@@ -32,6 +50,7 @@ Toggle TimeSet switch 3x in under 5 seconds will restart to portal to adjust set
 Select ESP32-WROOM-DA Module in Arduino IDE
 Partition scheme "Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS) required if SerialBT is enabled
 */
+
 
 #include <WiFi.h>
 #include <WebServer.h>
