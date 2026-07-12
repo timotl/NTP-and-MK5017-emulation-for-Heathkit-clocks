@@ -1,21 +1,21 @@
 /*
-Project: MK5017 Replacement
-Description: ESP32 sketch to replace MK5017 used in several HeathKit clocks
-Author: Landon Timothy
-Date: 6.30.2026
-
-License: MIT License
-Copyright (c) 2026 Landon Timothy
-
-Both the software code in this repository and the accompanying 
-hardware design files are open-source. 
-
-Permission is hereby granted, free of charge, to any person obtaining 
-a copy of this software and associated documentation files, to deal 
-in the Software and hardware designs without restriction, including 
-without limitation the rights to use, copy, modify, merge, publish, 
-distribute, sublicense, and/or sell copies.
-====================================================================
+ Project: MK5017 Replacement
+ Description: ESP32 sketch to replace MK5017 used in several HeathKit clocks
+ Author: Landon Timothy
+ Date: 6.30.2026
+ 
+ License: MIT License
+ Copyright (c) 2026 Landon Timothy
+ 
+ Both the software code in this repository and the accompanying 
+ hardware design files are open-source. 
+ 
+ Permission is hereby granted, free of charge, to any person obtaining 
+ a copy of this software and associated documentation files, to deal 
+ in the Software and hardware designs without restriction, including 
+ without limitation the rights to use, copy, modify, merge, publish, 
+ distribute, sublicense, and/or sell copies.
+ ====================================================================
 
 ESP32 sketch to replace MK5017 used in several HeathKit clocks
 Requires shift register and level shifting interface which connects to the original board via chip socket
@@ -33,24 +33,21 @@ GC-1092A/D - Original 555 touch hardware can be used, however each touch event m
 MK5017 mode:
 Switches and all behavior faithful to original hardware
 RTC simulates battery backup of the GC-1092A/D (but works on all models) - Will consider time valid for configurable number of hours.
-Switching modes will reset the model. Set model by pressing Hour/Month switch until the correct model is displayed, then press and release Time Set. 
+Switching modes will reset the model. Set model by pressing Hour/Month switch until the correct model is displayed, then toggle Time Set. 
 
 Switching modes:
 Holding Hour/Month switch at power up will change between MK5017 and Wifi mode. Display will go from 888888 to ------ and restart
 
-OTA capable
+OTA capable:
 Press Hour/Month and Minute/Day advance together to enter OTA mode. OTA mode uses AP mode with password and times out after 10 min.
 
-MK5017 Troubleshooting:
-Holding Minute advance at power up will reset the Model, RTC data and disable sw_HOLD (60Hz detection)
-
-WIFI Troubleshooting:
-Toggle TimeSet switch 3x in under 5 seconds will restart to portal to adjust settings.
+Troubleshooting - Toggle Time Set switch 3x in under 5 seconds.
+WIFI mode: Restart to portal to adjust WIFI and NTP settings.
+MK5017 mode: Restart clearing RTC and model
 
 Select ESP32-WROOM-DA Module in Arduino IDE
 Partition scheme "Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS) required if SerialBT is enabled
 */
-
 
 #include <WiFi.h>
 #include <WebServer.h>
@@ -82,9 +79,10 @@ bool UseCPStartup;
 int ntpinterval = 500;                        // NTP update interval
 ezDebugLevel_t ntpdebug = INFO;               // ezTime debug level
 RTC_DS3231 rtc;                 // RTC instance for MK5017 emulation mode
+int CurrentYear = 2026;
 int BatteryBackup = 6;           // Hours to consider 'Battery backup' valid
 int showdatesec = 10;             // Seconds to show date when touched
-#define USE_BT 0   // Master switch for BluetoothSerial -- Requires partition scheme "Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS)"
+#define USE_BT 1   // Master switch for BluetoothSerial -- Requires partition scheme "Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS)"
 
 
 // BT stuff
@@ -205,6 +203,25 @@ const uint8_t digits[] = {
     0b00000100,
 }; // Digit pin positions
 
+enum incrementTimeField
+{
+    Minutes,
+    MinuteTens,
+    Hours
+};
+
+enum incrementUpdateType
+{
+    UpdateLive,
+    UpdateStrings
+};
+
+enum DateField
+{
+    Day,
+    Month
+};
+
 enum DisplayMode
 {
     MODE_TIME,
@@ -305,6 +322,7 @@ volatile int lastMinuteSeen = 0;
 // Set Mode Globals
 enum EditTarget
 {
+    EDIT_TIMELIVE,
     EDIT_TIME,
     EDIT_ALARM,
     EDIT_DATE,
@@ -333,7 +351,7 @@ enum AlarmState
     ALARM_SNOOZE
 };
 AlarmState alarmState = ALARM_IDLE;
-DateTime alarmDT = DateTime(2025, 1, 1, 0, 0, 0);
+DateTime alarmDT = DateTime(CurrentYear, 1, 1, 0, 0, 0);
 bool alarmSet = false;
 bool alarmEnabled = false;
 uint32_t timeSeconds = -1;
@@ -366,10 +384,9 @@ void savePrefs(Emulation emu, Model model);
 void saveCPChanges();
 bool debounceSwitch(DebouncedSwitch &sw, bool raw, uint32_t nowMicros);
 void DispatchSwitches();
-void incrementMinuteOnes();
-void incrementMinuteTens();
-void incrementDate(bool m);
-void incrementHours();
+void incrementTime(incrementTimeField field, incrementUpdateType updateType); 
+void handleLiveTimeSet();
+void incrementDate(DateField field);
 void handleSetMode(EditTarget target);
 void enterSetMode(EditTarget target);
 void handleTimedDispatches();
@@ -737,51 +754,71 @@ void handleTimedDispatches()
         halfSecondFired = true; // don’t fire again until next second
     }
 }
-void incrementHours()
+
+void incrementTime(incrementTimeField field, incrementUpdateType updateType)
 {
-    hr24 = (hr24 + 1) % 24;
-    updateStrings();
+    switch (field)
+    {
+        case Hours:
+            hr24 = (hr24 + 1) % 24;
+            break;
+
+        case MinuteTens:
+            // MK5017 quirk
+            // tens minutes rolls independently, no carry into hours.
+            minutes = (minutes + 10) % 60;
+            break;
+
+        case Minutes:
+        {
+            // Mk5017 quirk
+            // minute ones rolls independently, no carry into tens.
+            uint8_t tens = minutes / 10;
+            uint8_t ones = minutes % 10;
+            ones = (ones + 1) % 10;   // no carry
+            minutes = tens * 10 + ones;
+            break;
+        }
+    }
+
+    switch (updateType)
+    {
+        case UpdateLive:
+            seconds = tz.second();
+            updateStrings();
+            break;
+
+        case UpdateStrings:
+            updateStrings();
+            break;
+    }
 }
 
-void incrementMinuteOnes()
-{
-    // Original behavior is only ones digit increment, no rollover
-    uint8_t tens = minutes / 10;
-    uint8_t ones = minutes % 10;
-    ones = (ones + 1) % 10;
-    minutes = tens * 10 + ones;
-    updateStrings();
-}
-
-void incrementMinuteTens()
-{
-    minutes = (minutes + 10) % 60;
-    updateStrings();
-}
-
-void incrementDate(bool m)
+void incrementDate(DateField field)
 {
     dateChanged = true;
     int month = displaystring.substring(0, 2).toInt(); // MM
-    int day = displaystring.substring(2, 4).toInt();   // DD
-    if (m)
+    int day   = displaystring.substring(2, 4).toInt(); // DD
+    switch (field)
     {
-        day++;
-        if (day > 31)
-        {
+        case Day:
+            // MK5017 quirk:
+            // Every month has 31 days, no year
+            day++;
+            if (day > 31)
+            {
+                month++;
+                day = 1;
+            }
+            if (month > 12)
+                month = 1;
+            break;
+        case Month:
             month++;
-            day = 1;
-        }
-        if (month > 12)
-            month = 1;
+            if (month > 12)
+                month = 1;
+            break;
     }
-    else
-    {
-        month++;
-        if (month > 12)
-            month = 1;
-    }
-    // Update string
     char buf[5];
     sprintf(buf, "%02d%02d", month, day);
     displaystring = String(buf);
@@ -794,12 +831,20 @@ void handleSetMode(EditTarget target)
         enterSetMode(target);
     }
 
+    // MK5017 quirk
+    // Increments are only at the top and half second 
     if (inEditMode && (topOfSecond || halfSecond))
     {
-        if (!sw_HOLD.state)
-        {
             switch (activeTarget)
             {
+            case EDIT_TIMELIVE:
+                if (sw_3.state && sw_4.state)
+                    incrementTime(MinuteTens, UpdateLive);
+                else if (sw_3.state)
+                    incrementTime(Hours, UpdateLive);
+                else if (sw_4.state)
+                    incrementTime(Minutes, UpdateLive);
+                break;
             case EDIT_TIME:
             case EDIT_ALARM:
                 if (sw_7.changed)
@@ -808,18 +853,19 @@ void handleSetMode(EditTarget target)
                     updateStrings();
                 }
                 if (sw_3.state && sw_4.state)
-                    incrementMinuteTens();
+                    incrementTime(MinuteTens, UpdateStrings);
                 else if (sw_3.state)
-                    incrementHours();
+                    incrementTime(Hours, UpdateStrings);
                 else if (sw_4.state)
-                    incrementMinuteOnes();
-
+                    incrementTime(Minutes, UpdateStrings);
                 break;
             case EDIT_DATE:
                 if (sw_3.state)
-                    incrementDate(false);
+                    //incrementDate(false);
+                    incrementDate(Month);
                 if (sw_4.state)
-                    incrementDate(true);
+                    //incrementDate(true);
+                    incrementDate(Day);
                 break;
             case EDIT_MODEL:
                 if (sw_3.state)
@@ -831,12 +877,15 @@ void handleSetMode(EditTarget target)
                 break;
             }
             updateDisplayValue();
-        }
+        
     }
 
     bool exitRequested = false;
     switch (activeTarget)
     {
+    case EDIT_TIMELIVE:
+        exitRequested = (!sw_3.state && !sw_4.state);
+        break;
     case EDIT_TIME:
         exitRequested = sw_HOLD.state
                             ? (sw_HOLD.changed && !sw_HOLD.state)
@@ -861,6 +910,15 @@ void enterSetMode(EditTarget target)
 {
     switch (target)
     {
+    case EDIT_TIMELIVE:
+        {
+            hr24 = tz.hour();
+            minutes = tz.minute();
+            seconds = tz.second();
+            updateStrings();
+            currentDisplayMode = MODE_SET;  
+        }
+        break;
     case EDIT_TIME:
         if (hr24 == 255)
         {
@@ -922,14 +980,15 @@ void commitSetMode()
 
     switch (activeTarget)
     {
+    case EDIT_TIMELIVE:
     case EDIT_TIME:
     {
         int mm = tz.month();
         int dd = tz.day();
         // Update canonical time into tz/rtc
-        tz.setTime(hr24, minutes, seconds, dd, mm, 2025);
-        // rtc.adjust(DateTime(2025, 1, 1, hr24, minutes, seconds + 1));
-        rtc.adjust(DateTime(2025, mm, dd, hr24, minutes, seconds));
+        tz.setTime(hr24, minutes, seconds, dd, mm, CurrentYear);
+        // rtc.adjust(DateTime(CurrentYear, 1, 1, hr24, minutes, seconds + 1));
+        rtc.adjust(DateTime(CurrentYear, mm, dd, hr24, minutes, seconds));
         keepRTCinsync();
         break;
     }
@@ -941,7 +1000,7 @@ void commitSetMode()
         uint8_t ss = 0;
 
         // Store as DateTime (date fields are dummy and ignored elsewhere)
-        alarmDT = DateTime(2025, 1, 1, hr24, mn, ss);
+        alarmDT = DateTime(CurrentYear, 1, 1, hr24, mn, ss);
         alarmSet = true;
 
         Serial.println("Committed alarm (HH:MM): " + String(hr24) + ":" + String(mn));
@@ -953,6 +1012,9 @@ void commitSetMode()
 
     case EDIT_DATE:
     {
+        // MK5017 quirk
+        // Touching original touchbar goes into date set mode to display time
+        // All months have 31 days
         if (dateChanged)
         {
             int mm = displaystring.substring(0, 2).toInt(); // MM
@@ -965,8 +1027,8 @@ void commitSetMode()
             int s = tz.second();
             dateSet = true;
             dateChanged = false;
-            tz.setTime(h, m, s, dd, mm, 2025);
-            rtc.adjust(DateTime(2025, mm, dd, h, m, s));
+            tz.setTime(h, m, s, dd, mm, CurrentYear);
+            rtc.adjust(DateTime(CurrentYear, mm, dd, h, m, s));
             Serial.println("Exit Date set: " + String(displaystring));
         }
         else
@@ -1166,7 +1228,7 @@ void DispatchSwitches()
 // sw_5 - Snooze / Show Date
 // sw_6 - Alarm Enable / Auto Date
 // sw_7 - 12/24 Hour Mode
-// sw_HOLD - Hold (1092 only)
+// sw_HOLD - Hold (1092 only) virtual
 {
     if ((sw_3.changed || sw_4.changed) && (sw_3.state && sw_4.state) && !inEditMode && !otaModeActive){
         ArduinoOTA_begin();
@@ -1191,6 +1253,19 @@ void DispatchSwitches()
                 handleSetMode(EDIT_DATE);
             }
         }
+        if ((sw_3.changed || sw_4.changed) && (sw_3.state || sw_4.state) && !inEditMode)
+        // Minute or Hour or both. Let setmode handle it from here
+        {
+            handleSetMode(EDIT_TIMELIVE);
+        }
+        // if (sw_3.changed && sw_3.state)
+        // {
+        //     incrementTime(Hours, UpdateLive);
+        // }
+        // else if (sw_4.changed && sw_4.state)
+        // {
+        //     incrementTime(Minutes, UpdateLive);
+        // }
         if  (sw_5.changed && (clockmodel != (MODEL_GC_1092D || MODEL_BOGUS)))
         {
             requestSnooze(); // state machine will handle transition
@@ -1383,14 +1458,11 @@ void keepRTCinsync()
     DateTime rtcnow = rtc.now();
     DateTime BatteryDead = rtc.now() + TimeSpan(0, BatteryBackup, 0, 0);
     rtc.setAlarm2(BatteryDead, DS3231_A2_Hour);
-    // rtc.clearAlarm(1);
     rtc.clearAlarm(2);
-    // rtc.disableAlarm(1);
     rtc.disableAlarm(2);
     // Set ezTime FROM RTC
     tz.setTime(rtcnow.hour(), rtcnow.minute(), rtcnow.second(),
                rtcnow.day(), rtcnow.month(), rtcnow.year());
-
     Serial.println("ezTime synced from RTC");
     Serial.println("RTC Time: " + String(rtcnow.hour()) + ':' + String(rtcnow.minute()) + ':' + String(rtcnow.second()));
     Serial.println("ezTime: " + String(tz.dateTime(is24HourMode ? "His" : "his")));
@@ -1399,27 +1471,12 @@ void keepRTCinsync()
 
 void setupConfigInit()
 {
-    // Startup switch check - H switch to change Mode or M switch for Safe mode
+    // Startup switch check - H switch to change Mode
     delay(1000);
     for (int i = 0; i < 8; i++)
     {
         CheckSwitches(); // check sw_1 through sw_7
         delay(25);
-    }
-
-    if (clockemulation == MK5017 && sw_4.state)
-    {
-        // Disable sw_HOLD and clear RTC RAM
-        Serial.println("Minute switch held - Clearing Model, disabling sw_HOLD, clearing RTC ram");
-        Disable_swHOLD = true;
-        clearRTC();
-        savePrefs(clockemulation, MODEL_BOGUS);
-        currentDisplayMode = MODE_MESSAGE;
-        messageindex = 8; // dashes
-        updateDisplayValue();
-        delay(2000);
-        ESP.restart();
-        delay(1000);
     }
 
     if (clockemulation == MK5017 && sw_3.state)
@@ -1436,6 +1493,7 @@ void setupConfigInit()
     else if (clockemulation == WIFI && sw_3.state)
     {
         savePrefs(MK5017, clockmodel);
+        clearRTC();
         Serial.println("Emulation set to MK5017 via hour advance switch. Rebooting...");
         currentDisplayMode = MODE_MESSAGE;
         messageindex = 8; // dashes
@@ -1491,7 +1549,7 @@ void setupEmulationInit()
             else
             {
                 Serial.println("RTC had invalid data. Reset time");
-                rtc.adjust(DateTime(2025, 1, 1, 0, 0, 0));
+                rtc.adjust(DateTime(CurrentYear, 1, 1, 0, 0, 0));
                 currentDisplayMode = MODE_MESSAGE;
                 messageindex = 7; // eights
                 //handleSetMode(EDIT_TIME);
@@ -1623,6 +1681,8 @@ void alarmToneDriver()
     }
 
     // Only SOUNDING state reaches here
+    // MK5017 quirk
+    // Alarm tone starts at top of second and stops at halfsecond
     if (topOfSecond)
     {
         alarmToneStart(); // start burst at second boundary
@@ -1691,7 +1751,7 @@ void alarmToneStop(void)
 void clearRTC()
 {
     rtc.begin();
-    DateTime alarm2Time = DateTime(2025, 1, 1, 00, 00, 00);
+    DateTime alarm2Time = DateTime(CurrentYear, 1, 1, 00, 00, 00);
     rtc.setAlarm1(alarm2Time, DS3231_A1_Date);
     rtc.setAlarm2(alarm2Time, DS3231_A2_Date);
 }
@@ -1708,9 +1768,15 @@ void ResetOn3xTimeSet() {
     timeSetCount++;
     Serial.println("timeSetCount: " + String(timeSetCount));
     if (timeSetCount >= 3) {
-        Serial.println("Rebooting to Setup...");
-        // Set prefs flag
-        prefs.putBool("UseCPStartup",1);
+        if (clockemulation == MK5017) {
+            Serial.println("Clearing RTC and resetting model to BOGUS...");
+            clearRTC();
+            savePrefs(clockemulation, MODEL_BOGUS);
+        } else {
+            Serial.println("Rebooting to Setup...");
+            // Set prefs flag
+            prefs.putBool("UseCPStartup",1);
+        }
         delay(1000);
         ESP.restart();
     }
