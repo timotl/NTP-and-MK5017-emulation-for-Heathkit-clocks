@@ -38,8 +38,8 @@ Switching modes will reset the model. Set model by pressing Hour/Month switch un
 Switching modes:
 Holding Hour/Month switch at power up will change between MK5017 and Wifi mode. Display will go from 888888 to ------ and restart
 
-OTA capable:
-Press Hour/Month and Minute/Day advance together to enter OTA mode. OTA mode uses AP mode with password and times out after 10 min.
+ArduinoOTA mode:
+Alarm/Date switch also enters OTA mode. OTA mode uses AP mode with password and times out after 10 min.
 
 Troubleshooting - Toggle Time Set switch 3x in under 5 seconds.
 WIFI mode: Restart to portal to adjust WIFI and NTP settings.
@@ -72,19 +72,18 @@ String wifihostname = "Heathkit-Clock";        // Hostname of ESP device
 String wifisetupssid = "Heathkit-Clock Setup"; // Setup AP mode SSID - no password
 String wifiotassid = "Heathkit-OTA";           // OTA AP mode SSID
 String wifiotapass = "update123";              // OTA AP mode password
-bool CP_Changes = 0;
-bool UseCPStartup;
+bool CP_Changes = 0;                           // Flag for pending CP changes
+bool UseCPStartup;                             // Flag for CP on startup 
 
-// === Global variables and constants ===
 int ntpinterval = 500;                        // NTP update interval
 ezDebugLevel_t ntpdebug = INFO;               // ezTime debug level
-RTC_DS3231 rtc;                 // RTC instance for MK5017 emulation mode
-int CurrentYear = 2026;
-int BatteryBackup = 6;           // Hours to consider 'Battery backup' valid
+RTC_DS3231 rtc;                   // RTC instance for MK5017 emulation mode
+int CurrentYear = 2026;           // RTC Current year (1092D only)
+int BatteryBackup = 6;            // Hours to consider 'Battery backup' valid
 int showdatesec = 10;             // Seconds to show date when touched
 #define USE_BT 1   // Master switch for BluetoothSerial -- Requires partition scheme "Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS)"
 
-
+// Should not need to change anything below here
 // BT stuff
 #if USE_BT
 #include "BluetoothSerial.h"
@@ -95,8 +94,7 @@ BluetoothSerial SerialBT;
 #define STOP_BT()
 #endif
 
-// Time of day and day of week blanking - only for WIFI mode
-// 7:30a - 6p M-F
+// Time of day and day of week blanking - WIFI mode only, set via Captive Portal
 bool timeBlankingEnabled;    // enable/disable time blanking, loaded from persistent config
 String ontime;               // 24 hour time hhmmss, loaded from persistent config
 String offtime;              // 24 hour time hhmmss, loaded from persistent config
@@ -108,6 +106,7 @@ char timeZoneBuf[64] = "";
 char blankingBuf[4] = "0";
 // Timezone and NTP setup  ezTime https://github.com/ropg/ezTime
 // POSIX definitions for local timezone selection in captive portal
+// Generated for North American timezones via Captive Portal
 constexpr const char *DEFAULT_TIMEZONE_POSIX = "MST7MDT,M3.2.0/2,M11.1.0/2"; // America/Denver timezone definition including DST On/Off
 String localTzPosix = DEFAULT_TIMEZONE_POSIX;
 Timezone tz;
@@ -128,11 +127,12 @@ const uint8_t pinAM = 18;    // AM pin on socket (16)
 const int sw_HOLD_Pin = 23;  // 60Hz pin on socket (23)
 bool Disable_swHOLD = false; // Disable HOLD function in case hardware issue
 
+bool ArduinoOTAEnabled = false;
 
 // NVS persistent configuration
 Preferences prefs;
 
-// Should not need to change anything below here
+// Alarm tone
 #define RMT_CH RMT_CHANNEL_1
 static bool toneActive = false;
 #define CYCLES_PER_HALFSECOND 425
@@ -407,10 +407,11 @@ void setupWifiManager();
 
 void setup()
 {   
+    pinMode(RMT_PIN, OUTPUT);
+    digitalWrite(RMT_PIN, LOW); //Make sure Tone pin off as soon as possible
     #if USE_BT
     SerialBT.begin("HeathkitClock_Serial");   
     #endif
-
     Serial.begin(115200);
     prefs.begin("mkclock", false);
     loadPrefs();
@@ -430,7 +431,6 @@ void setup()
         &displayTaskHandle, // Handle
         1                   // Core (1 = App core, 0 = Pro core)
     );
-    rmt_tx_stop(RMT_CH);
     ITimer1.attachInterruptInterval(T_INTERVAL, onDisplayTimer);
     touchAttachInterrupt(pinTouch, &gotTouchEvent, threshold); 
     // Touch ISR will be activated when touchRead is lower than the Threshold
@@ -469,7 +469,11 @@ void loop()
     {
         monitorAndRecoverNtp();
     }
-
+    if (ArduinoOTAEnabled == true) {
+        Serial.println("Enabling OTA");
+        ArduinoOTA_begin();
+        ArduinoOTAEnabled = false;
+    }
     ArduinoOTA.handle();
     checkOtaTimeout();
     events(); // ezTime tick
@@ -1227,14 +1231,15 @@ void DispatchSwitches()
 // sw_4 - Minute / Day Increment
 // sw_5 - Snooze / Show Date
 // sw_6 - Alarm Enable / Auto Date
-// sw_7 - 12/24 Hour Mode
-// sw_HOLD - Hold (1092 only) virtual
+// sw_7 - 12/24 Hour Mode (1092 only)
+// sw_HOLD - Hold (1092 only) emulated
 {
-    if ((sw_3.changed || sw_4.changed) && (sw_3.state && sw_4.state) && !inEditMode && !otaModeActive){
-        ArduinoOTA_begin();
-    }
     if (sw_1.changed && sw_1.state){
         ResetOn3xTimeSet();
+    }
+    if ((sw_2.changed && sw_2.state) && !ArduinoOTAEnabled && !otaModeActive)
+        {
+        ArduinoOTAEnabled = true;
     }
     if (clockemulation == MK5017){
         if (sw_1.changed && sw_1.state)
@@ -1258,14 +1263,6 @@ void DispatchSwitches()
         {
             handleSetMode(EDIT_TIMELIVE);
         }
-        // if (sw_3.changed && sw_3.state)
-        // {
-        //     incrementTime(Hours, UpdateLive);
-        // }
-        // else if (sw_4.changed && sw_4.state)
-        // {
-        //     incrementTime(Minutes, UpdateLive);
-        // }
         if  (sw_5.changed && (clockmodel != (MODEL_GC_1092D || MODEL_BOGUS)))
         {
             requestSnooze(); // state machine will handle transition
@@ -1304,6 +1301,7 @@ void DispatchSwitches()
             handleSetMode(EDIT_TIME);
         }
     }
+    
     // Keep handling edit mode updates/exit
     if (inEditMode)
     {
@@ -1457,7 +1455,7 @@ void keepRTCinsync()
 {
     DateTime rtcnow = rtc.now();
     DateTime BatteryDead = rtc.now() + TimeSpan(0, BatteryBackup, 0, 0);
-    rtc.setAlarm2(BatteryDead, DS3231_A2_Hour);
+    rtc.setAlarm2(BatteryDead, DS3231_A2_Date);
     rtc.clearAlarm(2);
     rtc.disableAlarm(2);
     // Set ezTime FROM RTC
@@ -1524,9 +1522,21 @@ void setupEmulationInit()
             Serial.println("RTC found");
             DateTime rtcnow = rtc.now();
             DateTime alarm2 = rtc.getAlarm2();
-            uint32_t nowS = (uint32_t)rtcnow.hour() * 3600 + (uint32_t)rtcnow.minute() * 60 + (uint32_t)rtcnow.second();
-            uint32_t alarmS = (uint32_t)alarm2.hour() * 3600 + (uint32_t)alarm2.minute() * 60 + (uint32_t)alarm2.second();
-            if (nowS <= alarmS)
+            
+
+            DateTime alarmCompare(
+                rtcnow.year(),
+                rtcnow.month(),
+                alarm2.day(),
+                alarm2.hour(),
+                alarm2.minute(),
+                0
+            );
+            //uint32_t nowS = (uint32_t)rtcnow.hour() * 3600 + (uint32_t)rtcnow.minute() * 60 + (uint32_t)rtcnow.second();
+            //uint32_t alarmS = (uint32_t)alarm2.hour() * 3600 + (uint32_t)alarm2.minute() * 60 + (uint32_t)alarm2.second();
+            //if (nowS <= alarmS)
+            if (rtcnow <= alarmCompare)
+            
             {
                 Serial.println("RTC had good data...seeding from RTC");
                 tz.setTime(rtcnow.hour(), rtcnow.minute(), rtcnow.second(),
@@ -1695,39 +1705,39 @@ void alarmToneDriver()
 
 void alarmToneInit(void)
 {
-    if (clockmodel != MODEL_GC_1092D) {
-        rmt_config_t cfg = RMT_DEFAULT_CONFIG_TX(RMT_PIN, RMT_CH);
-        cfg.clk_div = 80; // 1 µs ticks
-        cfg.tx_config.idle_output_en = true;
-        cfg.tx_config.idle_level = RMT_IDLE_LEVEL_LOW;
-        cfg.tx_config.carrier_en = false;
-        cfg.tx_config.loop_en = false;
-        rmt_config(&cfg);
-        rmt_driver_install(cfg.channel, 0, 0);
+        if (clockmodel != MODEL_GC_1092D) {
+            rmt_config_t cfg = RMT_DEFAULT_CONFIG_TX(RMT_PIN, RMT_CH);
+            cfg.clk_div = 80; // 1 µs ticks
+            cfg.tx_config.idle_output_en = true;
+            cfg.tx_config.idle_level = RMT_IDLE_LEVEL_LOW;
+            cfg.tx_config.carrier_en = false;
+            cfg.tx_config.loop_en = false;
+            rmt_config(&cfg);
+            rmt_driver_install(cfg.channel, 0, 0);
 
-        int idx = 0;
-        for (int c = 0; c < CYCLES_PER_HALFSECOND; c++)
-        {
-            for (int i = 0; i < 6; i++)
+            int idx = 0;
+            for (int c = 0; c < CYCLES_PER_HALFSECOND; c++)
             {
-                pulse_items[idx].level0 = 1;
-                pulse_items[idx].duration0 = 16;
+                for (int i = 0; i < 6; i++)
+                {
+                    pulse_items[idx].level0 = 1;
+                    pulse_items[idx].duration0 = 16;
+                    pulse_items[idx].level1 = 0;
+                    pulse_items[idx].duration1 = 532;
+                    idx++;
+                }
+                pulse_items[idx].level0 = 0;
+                pulse_items[idx].duration0 = 96;
                 pulse_items[idx].level1 = 0;
-                pulse_items[idx].duration1 = 532;
+                pulse_items[idx].duration1 = 1;
                 idx++;
             }
-            pulse_items[idx].level0 = 0;
-            pulse_items[idx].duration0 = 96;
-            pulse_items[idx].level1 = 0;
-            pulse_items[idx].duration1 = 1;
-            idx++;
+        } else {
+            //For 1092D, set pin HIGH to enable 12/24 switch
+            Serial.println("1092D Enable 12/24 Hour Switch");
+            pinMode(RMT_PIN, OUTPUT);
+            digitalWrite(RMT_PIN, HIGH);    
         }
-    } else {
-        //For 1092D, set pin HIGH to enable 12/24 switch
-        Serial.println("1092D Enable 12/24 Hour Switch");
-        pinMode(RMT_PIN, OUTPUT);
-        digitalWrite(RMT_PIN, HIGH);    
-    }
 }
 
 void alarmToneStart(void)
@@ -1785,6 +1795,7 @@ void ResetOn3xTimeSet() {
     timeSetCount = 1;
   }
 }
+
 
 void ArduinoOTA_begin() {
     STOP_BT();
