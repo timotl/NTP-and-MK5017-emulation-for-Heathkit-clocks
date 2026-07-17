@@ -3,37 +3,37 @@
  Description: ESP32 sketch to replace MK5017 used in several HeathKit clocks
  Author: Landon Timothy
  Date: 6.30.2026
- 
+
  License: MIT License
  Copyright (c) 2026 Landon Timothy
- 
- Both the software code in this repository and the accompanying 
- hardware design files are open-source. 
- 
- Permission is hereby granted, free of charge, to any person obtaining 
- a copy of this software and associated documentation files, to deal 
- in the Software and hardware designs without restriction, including 
- without limitation the rights to use, copy, modify, merge, publish, 
+
+ Both the software code in this repository and the accompanying
+ hardware design files are open-source.
+
+ Permission is hereby granted, free of charge, to any person obtaining
+ a copy of this software and associated documentation files, to deal
+ in the Software and hardware designs without restriction, including
+ without limitation the rights to use, copy, modify, merge, publish,
  distribute, sublicense, and/or sell copies.
  ====================================================================
 
-ESP32 sketch to replace MK5017 used in several HeathKit clocks
+ESP32 sketch to replace MK5017AA and BA used in HeathKit panaplex clocks
 Requires shift register and level shifting interface which connects to the original board via chip socket
-No modifications to the original clock except adding a 5v power supply module at the 120v input line
-Heathkit GC-1092D, Heathkit GC-1005, Heathkit GC-1092A fully tested. GC-1094 not tested (yet)
+No modifications to the original clock, except adding a 5v power supply module at the 120v input line
+Heathkit GC-1092D, Heathkit GC-1005, Heathkit GC-1092A, Heathkit GC-1094 all fully tested
 Display updates are state driven and writing to display is handled by hardware timer
 
 WIFI mode:
 Portal will be active if the configured wifi settings do not connect or if the time cannot be set from the configured NTP server after 1 minute.
 NTP server, timezone, display off times are set through the portal.
 
-ESP Touch (also snooze or alarmoff switches) changes display from Time to Date, Date to display off, display off to on. 
+ESP Touch (also snooze or alarmoff switches) changes display from Time to Date, Date to display off, display off to on.
 GC-1092A/D - Original 555 touch hardware can be used, however each touch event must be at least 5 seconds apart.
 
 MK5017 mode:
 Switches and all behavior faithful to original hardware
 RTC simulates battery backup of the GC-1092A/D (but works on all models) - Will consider time valid for configurable number of hours.
-Switching modes will reset the model. Set model by pressing Hour/Month switch until the correct model is displayed, then toggle Time Set. 
+Switching modes will reset the model. Set model by pressing Hour/Month switch until the correct model is displayed, then toggle Time Set.
 
 Switching modes:
 Holding Hour/Month switch at power up will change between MK5017 and Wifi mode. Display will go from 888888 to ------ and restart
@@ -73,34 +73,34 @@ String wifisetupssid = "Heathkit-Clock Setup"; // Setup AP mode SSID - no passwo
 String wifiotassid = "Heathkit-OTA";           // OTA AP mode SSID
 String wifiotapass = "update123";              // OTA AP mode password
 bool CP_Changes = 0;                           // Flag for pending CP changes
-bool UseCPStartup;                             // Flag for CP on startup 
+bool UseCPStartup;                             // Flag for CP on startup
 
-int ntpinterval = 500;                        // NTP update interval
-ezDebugLevel_t ntpdebug = INFO;               // ezTime debug level
-RTC_DS3231 rtc;                   // RTC instance for MK5017 emulation mode
-int CurrentYear = 2026;           // RTC Current year (1092D only)
-int BatteryBackup = 6;            // Hours to consider 'Battery backup' valid
-int showdatesec = 10;             // Seconds to show date when touched
-#define USE_BT 1   // Master switch for BluetoothSerial -- Requires partition scheme "Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS)"
+int ntpinterval = 500;          // NTP update interval
+ezDebugLevel_t ntpdebug = INFO; // ezTime debug level
+RTC_DS3231 rtc;                 // RTC instance only for MK5017 emulation mode
+int CurrentYear = 2026;         // RTC Current year seed (1092D MK5017 only) Original hardware does not have a year, but for RTC emulation we have a proper calendar
+int BatteryBackup = 6;          // Hours to consider 'Battery backup' valid
+int showdatesec = 10;           // Seconds to show date when touched
+#define USE_BT 1                // compile-time switch for BluetoothSerial -- Requires partition scheme "Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS)"
 
 // Should not need to change anything below here
-// BT stuff
+// BT stuff - Replace hardware serial with BluetoothSerial if USE_BT is true
 #if USE_BT
 #include "BluetoothSerial.h"
 BluetoothSerial SerialBT;
-#define Serial SerialBT
+#define Serial SerialBT // Rename Serial to SerialBT for all Serial calls
 #define STOP_BT() SerialBT.end()
 #else
 #define STOP_BT()
 #endif
 
 // Time of day and day of week blanking - WIFI mode only, set via Captive Portal
-bool timeBlankingEnabled;    // enable/disable time blanking, loaded from persistent config
-String ontime;               // 24 hour time hhmmss, loaded from persistent config
-String offtime;              // 24 hour time hhmmss, loaded from persistent config
-String weekendDay1;          // days to blank display, loaded from persistent config
-String weekendDay2;          // days to blank display, loaded from persistent config
-String ntpserver;            // NTP server name, loaded from persistent config
+bool timeBlankingEnabled; // enable/disable time blanking, loaded from persistent config
+String ontime;            // 24 hour time hhmmss, loaded from persistent config
+String offtime;           // 24 hour time hhmmss, loaded from persistent config
+String weekendDay1;       // days to blank display, loaded from persistent config
+String weekendDay2;       // days to blank display, loaded from persistent config
+String ntpserver;         // NTP server name, loaded from persistent config
 
 char timeZoneBuf[64] = "";
 char blankingBuf[4] = "0";
@@ -117,11 +117,11 @@ const uint8_t pinClock = 14; // shift register clock
 const uint8_t pinLatch = 15; // shift register latch
 const uint8_t pinKA = 17;    // KA pin on socket (22)
 const uint8_t pinKB = 16;    // KB pin on socket (21)
-//Handbuilt board is backwards
-//const uint8_t pinKA = 16;    // KA pin on socket (22)
-//const uint8_t pinKB = 17;    // KB pin on socket (21)
+// Handbuilt board is backwards
+// const uint8_t pinKA = 16;    // KA pin on socket (22)
+// const uint8_t pinKB = 17;    // KB pin on socket (21)
 
-const uint8_t pinTouch = 4;  // Touch input 
+const uint8_t pinTouch = 4;  // Touch input
 const uint8_t pinAM = 18;    // AM pin on socket (16)
 #define RMT_PIN GPIO_NUM_19  // Tone pin on socket (20)
 const int sw_HOLD_Pin = 23;  // 60Hz pin on socket (23)
@@ -141,7 +141,7 @@ static bool toneActive = false;
 static rmt_item32_t pulse_items[TOTAL_ITEMS];
 
 // Display stuff
-ESP32Timer ITimer1(1);
+ESP32Timer ITimer1(1); // Timer 1 for display driving
 TaskHandle_t displayTaskHandle = nullptr;
 const uint32_t T_INTERVAL = 525; // timer interval
 const uint8_t NUM_DIGITS = 6;
@@ -194,6 +194,7 @@ const uint8_t
 #define CHAR_BLANK 26
 #define CHAR_DASH 27
 
+// Digit pin positions in the digit byte
 const uint8_t digits[] = {
     0b10000000,
     0b01000000,
@@ -201,7 +202,7 @@ const uint8_t digits[] = {
     0b00010000,
     0b00001000,
     0b00000100,
-}; // Digit pin positions
+};
 
 enum incrementTimeField
 {
@@ -264,6 +265,7 @@ const char *modelToString(Model m)
     }
 }
 
+// Display messages in readable form
 constexpr int MESSAGE_COUNT = 10;
 const uint8_t messagearray[MESSAGE_COUNT][NUM_DIGITS] = {
     {1, 0, 0, 5, CHAR_BLANK, CHAR_BLANK}, // 1005
@@ -277,45 +279,42 @@ const uint8_t messagearray[MESSAGE_COUNT][NUM_DIGITS] = {
     {CHAR_DASH, CHAR_DASH, CHAR_DASH, CHAR_DASH, CHAR_DASH, CHAR_DASH},
     {CHAR_BLANK, CHAR_BLANK, CHAR_BLANK, CHAR_BLANK, CHAR_BLANK, CHAR_BLANK},
 };
-int messageindex = 7; // default to eights
+int messageindex = 7; // default to eights at startup
 
 constexpr Emulation defaultEmulation = WIFI;
-constexpr Model defaultModel = MODEL_BOGUS;
+constexpr Model defaultModel = MODEL_BOGUS; // Default to unset model, user must set model for MK5017 emulation
 Emulation clockemulation = defaultEmulation;
 Model clockmodel = defaultModel;
-
 // end of display stuff
 
-// Switches
+// Switches - debounced switch state tracking. .changed is true for one loop when the state toggles
 struct DebouncedSwitch
 {
     bool state = false;      // current stable state
     bool changed = false;    // true for one loop when state toggles
     bool lastRead = false;   // last raw sample
     uint32_t lastChange = 0; // micros() of last raw transition
-    uint32_t changedAt = 0;  // when .changed was set
 };
 
 DebouncedSwitch sw_1, sw_2, sw_3, sw_4, sw_5, sw_6, sw_7, sw_HOLD;
 // static DebouncedSwitch *switches[] = { &sw_1, &sw_2, &sw_3, &sw_4, &sw_5, &sw_6, &sw_7, &sw_HOLD };
-const uint32_t debounceDelay = 1000; // us
+const uint32_t debounceDelay = 1000; // 1 ms debounce delay for switches
 
-// touch
+// Touch input state and event tracking for the ESP/555 touch logic
 int threshold = 30;
 bool touchActive = false;
 bool lastTouchActive = false;
 bool gotevent = false;
-bool testingLower = true;
-int datecounter = 0;
-bool touchoverride = false;         // Short-term override for date display
+bool testingLower = true;   // true = trigger on lower than threshold, false = trigger on higher than threshold
+int datecounter = 0;        // holds the remaining seconds to keep date visible after touch
+bool touchoverride = false; // forces a temporary date display outside normal auto-date timing
 
-
-// Extra inputs and globals for emulation
-bool is24HourMode = false; // Default to 12-hour
+// Half-second and second-edge timing used to emulate MK5017 display/update cadence.
+bool is24HourMode = false;                  // Default to 12-hour
 constexpr uint32_t HALF_OFFSET_US = 500000; // 0.5 s in microseconds
 uint32_t secondEdgeMicros = 0;              // micros at the top-of-second edge
-volatile bool halfSecond = false;
-volatile bool topOfSecond = false;
+volatile bool halfSecond = false;           // will be true for one loop iteration when half-second has elapsed since top-of-second
+volatile bool topOfSecond = false;          // will be true for one loop iteration when a new second has started
 bool halfSecondFired = false;
 volatile int lastMinuteSeen = 0;
 
@@ -330,19 +329,19 @@ enum EditTarget
 };
 
 String timestring = "";
-uint8_t hr24 = 255; // 0–23, canonical hour, 255 means unset
-uint8_t minutes;    // 0–59
-uint8_t seconds;    // 0–59
-String datestring = "";
-String setstring = "";
-String displaystring = "";
+uint8_t hr24 = 255;        // 0–23, canonical hour, 255 means unset (always 24 hour time)
+uint8_t minutes;           // 0–59
+uint8_t seconds;           // 0–59
+String datestring = "";    // MMDD format, updated from RTC or NTP
+String setstring = "";     // String used for set mode display, updated when incrementing time/date
+String displaystring = ""; // String currently displayed
 EditTarget activeTarget = EDIT_TIME;
 bool inEditMode = false;
 bool dateSet = false;
 volatile bool dateChanged = false;
 bool autoDate = false;
 
-// Alarm globals
+// Alarm globals (MK5017 emulation only)
 enum AlarmState
 {
     ALARM_IDLE,
@@ -357,8 +356,8 @@ bool alarmEnabled = false;
 uint32_t timeSeconds = -1;
 uint32_t alarmSeconds = 0;
 uint32_t snoozeTargetS = 0;
-const uint8_t SNOOZE_MIN = 7;
-const uint8_t ALARM_MAX_MIN = 60;
+const uint8_t SNOOZE_MIN = 7;     // Snooze duration in minutes (MK5017 is 7 minutes)
+const uint8_t ALARM_MAX_MIN = 60; // Maximum alarm duration in minutes (MK5017 is 60 minutes)
 
 // Wifi OTA fallback
 bool otaModeActive = false;              // Tracks whether OTA mode is currently active
@@ -384,7 +383,7 @@ void savePrefs(Emulation emu, Model model);
 void saveCPChanges();
 bool debounceSwitch(DebouncedSwitch &sw, bool raw, uint32_t nowMicros);
 void DispatchSwitches();
-void incrementTime(incrementTimeField field, incrementUpdateType updateType); 
+void incrementTime(incrementTimeField field, incrementUpdateType updateType);
 void handleLiveTimeSet();
 void incrementDate(DateField field);
 void handleSetMode(EditTarget target);
@@ -406,12 +405,9 @@ void setupWifiManager();
 // =====================================
 
 void setup()
-{   
-    pinMode(RMT_PIN, OUTPUT);
-    digitalWrite(RMT_PIN, LOW); //Make sure Tone pin off as soon as possible
-    #if USE_BT
-    SerialBT.begin("HeathkitClock_Serial");   
-    #endif
+{
+    pinMode(RMT_PIN, OUTPUT);   // Make sure Tone pin off as soon as possible
+    digitalWrite(RMT_PIN, LOW); // Make sure Tone pin off as soon as possible
     Serial.begin(115200);
     prefs.begin("mkclock", false);
     loadPrefs();
@@ -422,21 +418,21 @@ void setup()
     pinMode(pinKB, INPUT);
     pinMode(pinAM, OUTPUT);
     pinMode(sw_HOLD_Pin, INPUT);
-    xTaskCreatePinnedToCore(
-        displayTask,        // Task function
-        "DisplayTask",      // Name
-        2048,               // Stack size
-        NULL,               // Parameters
-        2,                  // Priority (higher than idle)
-        &displayTaskHandle, // Handle
-        1                   // Core (1 = App core, 0 = Pro core)
+    xTaskCreatePinnedToCore( // Create a dedicated display task pinned to the second core for stable multiplexing.
+        displayTask,         // Task function
+        "DisplayTask",       // Name
+        2048,                // Stack size
+        NULL,                // Parameters
+        2,                   // Priority (higher than idle)
+        &displayTaskHandle,  // Handle
+        1                    // Core (1 = App core, 0 = Pro core)
     );
-    ITimer1.attachInterruptInterval(T_INTERVAL, onDisplayTimer);
-    touchAttachInterrupt(pinTouch, &gotTouchEvent, threshold); 
+    ITimer1.attachInterruptInterval(T_INTERVAL, onDisplayTimer); // Attach a hardware timer interrupt to notify the display task at the multiplex interval.
+    touchAttachInterrupt(pinTouch, &gotTouchEvent, threshold);
     // Touch ISR will be activated when touchRead is lower than the Threshold
     touchInterruptSetThresholdDirection(testingLower);
-    currentDisplayMode = MODE_MESSAGE;
-    messageindex = 7; // eights
+    currentDisplayMode = MODE_MESSAGE; // Start with the "eights" message on the display
+    messageindex = 7;                  // eights
     updateDisplayValue();
     setupConfigInit();
     setupEmulationInit();
@@ -444,6 +440,7 @@ void setup()
     delay(50);
 } // End of setup
 
+// Main program loop: poll switches, timed logic, display updates, touch, and mode dispatch.
 void loop()
 {
     CheckSwitches();
@@ -454,7 +451,7 @@ void loop()
     // WIFI mode uses NTP, MK5017 mode uses DS3231 RTC
     if (clockemulation == MK5017)
     {
-        if (clockmodel != MODEL_GC_1092D) 
+        if (clockmodel != MODEL_GC_1092D)
         {
             updateAlarm();
             alarmToneDriver();
@@ -469,15 +466,17 @@ void loop()
     {
         monitorAndRecoverNtp();
     }
-    if (ArduinoOTAEnabled == true) {
+    // OTA mode handling - Done here to avoid the delay entering set Alarm/Date mode while enabling OTA
+    if (ArduinoOTAEnabled == true)
+    {
         Serial.println("Enabling OTA");
         ArduinoOTA_begin();
         ArduinoOTAEnabled = false;
     }
-    ArduinoOTA.handle();
-    checkOtaTimeout();
-    events(); // ezTime tick
-    // Switch status readout - prints to serial for debugging. 
+    ArduinoOTA.handle(); // Standard OTA handling, must be called frequently in loop()
+    checkOtaTimeout();   // Check for OTA timeout and revert to normal operation if needed
+    events();            // ezTime event handling, must be called frequently in loop()
+    // Switch status readout - prints to serial for debugging.
     //   DebouncedSwitch *switches[] = { &sw_1, &sw_2, &sw_3, &sw_4, &sw_5, &sw_6, &sw_7, &sw_HOLD };
     //   const char *labels[] = { "1.TS", "2.AS_DS", "3.H_M", "4.M_D", "5.SN_ACT", "6.AE_ATS", "7.12_24", "SW_HOLD" };
     //  for (int i = 0; i < 8; i++) {
@@ -487,15 +486,15 @@ void loop()
     //    }
     //  }
     // clear switch changed (readout only) flags at end of loop()
-    //for (int i = 0; i < 8; ++i) switches[i]->changed = false;
+    // for (int i = 0; i < 8; ++i) switches[i]->changed = false;
     // end Switch status readout
 
     topOfSecond = false;
     halfSecond = false;
 } // End of loop
 
-void updateDisplayValue()
-{ // Updates display messages but not dynamic content
+void updateDisplayValue() // Updates display messages but not dynamic content
+{
     switch (currentDisplayMode)
     {
     case MODE_TIME:
@@ -581,12 +580,13 @@ void updateDisplayValue()
     }
 }
 
-void updateDisplayStateIfNeeded() {
-    // Get time and date for determining weekend and time-based blanking
+void updateDisplayStateIfNeeded()
+{                                                 // Compute current time/day and decide whether the display should be shown or blanked.
     int currentTime = tz.dateTime("His").toInt(); // HHMMSS as int
     String currentDay = tz.dateTime("l");
-    // Update time and date so they are never stale, except hold
-    if (!sw_HOLD.state) {
+
+    if (!sw_HOLD.state)
+    { // Update time and date so they are never stale, except hold
         timestring = tz.dateTime(is24HourMode ? "His" : "his");
         datestring = tz.dateTime("md");
     }
@@ -597,8 +597,10 @@ void updateDisplayStateIfNeeded() {
     bool isWeekend = (currentDay == weekendDay1 || currentDay == weekendDay2);
     bool withinDisplayWindow = !timeBlankingEnabled || (currentTime >= ontimeint && currentTime < offtimeint && !isWeekend);
 
-    if (clockemulation == MK5017) {
-        if (gotevent) {
+    if (clockemulation == MK5017)
+    {
+        if (gotevent)
+        {
             touchoverride = true;
             datecounter = 5;
             currentDisplayMode = MODE_DATE;
@@ -608,20 +610,28 @@ void updateDisplayStateIfNeeded() {
             return;
 
         // 1092D date stuff
-        if (clockmodel == MODEL_GC_1092D && !inEditMode) {
-            if (autoDate || touchoverride) {
-                if ((tz.second() % 10 == 8) || (tz.second() % 10 == 9)) {
+        if (clockmodel == MODEL_GC_1092D && !inEditMode)
+        {
+            if (autoDate || touchoverride)
+            {
+                if ((tz.second() % 10 == 8) || (tz.second() % 10 == 9))
+                {
                     currentDisplayMode = MODE_DATE;
-                    //Serial.println("matches 8/9 sec - autodate on");
-                } else if (currentDisplayMode != MODE_TIME && !touchoverride) {
+                    // Serial.println("matches 8/9 sec - autodate on");
+                }
+                else if (currentDisplayMode != MODE_TIME && !touchoverride)
+                {
                     currentDisplayMode = MODE_TIME;
-                    //Serial.println("Setting back mode_time - autodate on");
+                    // Serial.println("Setting back mode_time - autodate on");
                 }
             }
 
-            if (datecounter > 1 && (!autoDate || touchoverride)) {
+            if (datecounter > 1 && (!autoDate || touchoverride))
+            {
                 datecounter--;
-            } else if (currentDisplayMode == MODE_DATE && (!autoDate || touchoverride)) {
+            }
+            else if (currentDisplayMode == MODE_DATE && (!autoDate || touchoverride))
+            {
                 datecounter = 0;
                 if (touchoverride)
                     touchoverride = false;
@@ -631,15 +641,19 @@ void updateDisplayStateIfNeeded() {
         return;
     }
 
-    if (gotevent) {
+    if (gotevent)
+    {
         // Caught touch event, ESP pin or computed by switch states
         Serial.print("Touch event detected: ");
-        if (currentDisplayMode == MODE_TIME) {
+        if (currentDisplayMode == MODE_TIME)
+        {
             currentDisplayMode = MODE_DATE;
             Serial.println("Show date");
             touchoverride = true;
             datecounter = (clockemulation == WIFI) ? showdatesec : 5;
-        } else if (currentDisplayMode == MODE_DATE && clockemulation == WIFI) {
+        }
+        else if (currentDisplayMode == MODE_DATE && clockemulation == WIFI)
+        {
             currentDisplayMode = MODE_MESSAGE;
             messageindex = 9;
             datecounter = 0;
@@ -647,7 +661,9 @@ void updateDisplayStateIfNeeded() {
             Serial.println("Blank display");
             manualDisplayOff = true;
             manualDisplayOn = false;
-        } else if (currentDisplayMode == MODE_MESSAGE && messageindex == 9) {
+        }
+        else if (currentDisplayMode == MODE_MESSAGE && messageindex == 9)
+        {
             currentDisplayMode = MODE_TIME;
             manualDisplayOn = true;
             manualDisplayOff = false;
@@ -656,10 +672,14 @@ void updateDisplayStateIfNeeded() {
         gotevent = false;
     }
 
-    if (datecounter > 0 && currentDisplayMode == MODE_DATE) {
+    if (datecounter > 0 && currentDisplayMode == MODE_DATE)
+    {
         datecounter--;
-    } else if (currentDisplayMode == MODE_DATE) {
-        if (datecounter == 0) {
+    }
+    else if (currentDisplayMode == MODE_DATE)
+    {
+        if (datecounter == 0)
+        {
             Serial.println("Datecounter timed out - Show time");
             if (touchoverride)
                 touchoverride = false;
@@ -667,21 +687,26 @@ void updateDisplayStateIfNeeded() {
         }
     }
 
-    if (withinDisplayWindow && manualDisplayOn) {
+    if (withinDisplayWindow && manualDisplayOn)
+    {
         manualDisplayOn = false;
         Serial.println("Inside display window - Resetting manualDisplayOn");
     }
-    if (!withinDisplayWindow && manualDisplayOff) {
+    if (!withinDisplayWindow && manualDisplayOff)
+    {
         manualDisplayOff = false;
         Serial.println("Outside display window - Resetting manualDisplayOff");
     }
 
-    if (currentDisplayMode != MODE_DATE) {
-        if ((!withinDisplayWindow || manualDisplayOff) && !manualDisplayOn) {
+    if (currentDisplayMode != MODE_DATE)
+    {
+        if ((!withinDisplayWindow || manualDisplayOff) && !manualDisplayOn)
+        {
             currentDisplayMode = MODE_MESSAGE;
             messageindex = 9;
         }
-        if ((withinDisplayWindow || manualDisplayOn) && !manualDisplayOff) {
+        if ((withinDisplayWindow || manualDisplayOn) && !manualDisplayOff)
+        {
             currentDisplayMode = MODE_TIME;
         }
     }
@@ -696,7 +721,7 @@ bool IRAM_ATTR onDisplayTimer(void *)
     return true;
 }
 
-void displayTask(void *pvParameters)
+void displayTask(void *pvParameters) // Dedicated display task for outputting to the shift register. Waits for notification from ISR and then updates the display.
 {
     for (;;)
     {
@@ -718,7 +743,7 @@ void displayTask(void *pvParameters)
     }
 }
 
-void handleTimedDispatches()
+void handleTimedDispatches() // Handle timed events such as second and half-second updates, minute changes, and alarm timing.
 {
     if (secondChanged())
     {
@@ -759,76 +784,76 @@ void handleTimedDispatches()
     }
 }
 
-void incrementTime(incrementTimeField field, incrementUpdateType updateType)
+void incrementTime(incrementTimeField field, incrementUpdateType updateType) // Increment time fields (hours, minutes, tens of minutes)
 {
     switch (field)
     {
-        case Hours:
-            hr24 = (hr24 + 1) % 24;
-            break;
+    case Hours:
+        hr24 = (hr24 + 1) % 24;
+        break;
 
-        case MinuteTens:
-            // MK5017 quirk
-            // tens minutes rolls independently, no carry into hours.
-            minutes = (minutes + 10) % 60;
-            break;
+    case MinuteTens:
+        // MK5017 quirk
+        // tens minutes rolls independently, no carry into hours.
+        minutes = (minutes + 10) % 60;
+        break;
 
-        case Minutes:
-        {
-            // Mk5017 quirk
-            // minute ones rolls independently, no carry into tens.
-            uint8_t tens = minutes / 10;
-            uint8_t ones = minutes % 10;
-            ones = (ones + 1) % 10;   // no carry
-            minutes = tens * 10 + ones;
-            break;
-        }
+    case Minutes:
+    {
+        // Mk5017 quirk
+        // minute ones rolls independently, no carry into tens.
+        uint8_t tens = minutes / 10;
+        uint8_t ones = minutes % 10;
+        ones = (ones + 1) % 10; // no carry
+        minutes = tens * 10 + ones;
+        break;
+    }
     }
 
     switch (updateType)
     {
-        case UpdateLive:
-            seconds = tz.second();
-            updateStrings();
-            break;
+    case UpdateLive:
+        seconds = tz.second();
+        updateStrings();
+        break;
 
-        case UpdateStrings:
-            updateStrings();
-            break;
+    case UpdateStrings:
+        updateStrings();
+        break;
     }
 }
 
-void incrementDate(DateField field)
+void incrementDate(DateField field) // Increment date fields (day, month)
 {
     dateChanged = true;
     int month = displaystring.substring(0, 2).toInt(); // MM
-    int day   = displaystring.substring(2, 4).toInt(); // DD
+    int day = displaystring.substring(2, 4).toInt();   // DD
     switch (field)
     {
-        case Day:
-            // MK5017 quirk:
-            // Every month has 31 days, no year
-            day++;
-            if (day > 31)
-            {
-                month++;
-                day = 1;
-            }
-            if (month > 12)
-                month = 1;
-            break;
-        case Month:
+    case Day:
+        // MK5017 quirk:
+        // Every month has 31 days, no year
+        day++;
+        if (day > 31)
+        {
             month++;
-            if (month > 12)
-                month = 1;
-            break;
+            day = 1;
+        }
+        if (month > 12)
+            month = 1;
+        break;
+    case Month:
+        month++;
+        if (month > 12)
+            month = 1;
+        break;
     }
     char buf[5];
     sprintf(buf, "%02d%02d", month, day);
     displaystring = String(buf);
 }
 
-void handleSetMode(EditTarget target)
+void handleSetMode(EditTarget target) // Handle user input and updates while in set mode for time, date, alarm, or model selection.
 {
     if (!inEditMode)
     {
@@ -836,52 +861,51 @@ void handleSetMode(EditTarget target)
     }
 
     // MK5017 quirk
-    // Increments are only at the top and half second 
+    // Increments are only at the top and half second
     if (inEditMode && (topOfSecond || halfSecond))
     {
-            switch (activeTarget)
+        switch (activeTarget)
+        {
+        case EDIT_TIMELIVE:
+            if (sw_3.state && sw_4.state)
+                incrementTime(MinuteTens, UpdateLive);
+            else if (sw_3.state)
+                incrementTime(Hours, UpdateLive);
+            else if (sw_4.state)
+                incrementTime(Minutes, UpdateLive);
+            break;
+        case EDIT_TIME:
+        case EDIT_ALARM:
+            if (sw_7.changed)
             {
-            case EDIT_TIMELIVE:
-                if (sw_3.state && sw_4.state)
-                    incrementTime(MinuteTens, UpdateLive);
-                else if (sw_3.state)
-                    incrementTime(Hours, UpdateLive);
-                else if (sw_4.state)
-                    incrementTime(Minutes, UpdateLive);
-                break;
-            case EDIT_TIME:
-            case EDIT_ALARM:
-                if (sw_7.changed)
-                {
-                    is24HourMode = sw_7.state;
-                    updateStrings();
-                }
-                if (sw_3.state && sw_4.state)
-                    incrementTime(MinuteTens, UpdateStrings);
-                else if (sw_3.state)
-                    incrementTime(Hours, UpdateStrings);
-                else if (sw_4.state)
-                    incrementTime(Minutes, UpdateStrings);
-                break;
-            case EDIT_DATE:
-                if (sw_3.state)
-                    //incrementDate(false);
-                    incrementDate(Month);
-                if (sw_4.state)
-                    //incrementDate(true);
-                    incrementDate(Day);
-                break;
-            case EDIT_MODEL:
-                if (sw_3.state)
-                {
-                    messageindex = (messageindex + 1) % 4;
-                    Serial.println(messageindex);
-                    updateDisplayValue();
-                }
-                break;
+                is24HourMode = sw_7.state;
+                updateStrings();
             }
-            updateDisplayValue();
-        
+            if (sw_3.state && sw_4.state)
+                incrementTime(MinuteTens, UpdateStrings);
+            else if (sw_3.state)
+                incrementTime(Hours, UpdateStrings);
+            else if (sw_4.state)
+                incrementTime(Minutes, UpdateStrings);
+            break;
+        case EDIT_DATE:
+            if (sw_3.state)
+                // incrementDate(false);
+                incrementDate(Month);
+            if (sw_4.state)
+                // incrementDate(true);
+                incrementDate(Day);
+            break;
+        case EDIT_MODEL:
+            if (sw_3.state)
+            {
+                messageindex = (messageindex + 1) % 4;
+                Serial.println(messageindex);
+                updateDisplayValue();
+            }
+            break;
+        }
+        updateDisplayValue();
     }
 
     bool exitRequested = false;
@@ -910,19 +934,19 @@ void handleSetMode(EditTarget target)
     }
 }
 
-void enterSetMode(EditTarget target)
+void enterSetMode(EditTarget target) // Enter set mode for time, date, alarm, or model selection. Initializes the editing state and prepares the display.
 {
     switch (target)
     {
     case EDIT_TIMELIVE:
-        {
-            hr24 = tz.hour();
-            minutes = tz.minute();
-            seconds = tz.second();
-            updateStrings();
-            currentDisplayMode = MODE_SET;  
-        }
-        break;
+    {
+        hr24 = tz.hour();
+        minutes = tz.minute();
+        seconds = tz.second();
+        updateStrings();
+        currentDisplayMode = MODE_SET;
+    }
+    break;
     case EDIT_TIME:
         if (hr24 == 255)
         {
@@ -967,7 +991,7 @@ void enterSetMode(EditTarget target)
     case EDIT_MODEL:
         messageindex = 0;
         currentDisplayMode = MODE_MESSAGE;
-        //overrideForBlank = true;
+        // overrideForBlank = true;
         break;
     }
 
@@ -977,7 +1001,7 @@ void enterSetMode(EditTarget target)
     updateDisplayValue();
 }
 
-void commitSetMode()
+void commitSetMode() // Commit changes made in set mode to the RTC and internal state, and exit set mode.
 {
     if (!inEditMode)
         return;
@@ -1062,13 +1086,12 @@ void commitSetMode()
     lastMinuteSeen = -1;
     setstring = "";
     currentDisplayMode = MODE_TIME;
-    Serial.println("Exited set mode");    
+    Serial.println("Exited set mode");
     updateDisplayStateIfNeeded();
     updateDisplayValue();
-    
 }
 
-void updateStrings()
+void updateStrings() // Update the canonical time string, AM/PM pin, and display string based on the current hr24, minutes, and seconds values.
 {
     // Canonical string
     char buf[7];
@@ -1085,7 +1108,7 @@ void updateStrings()
     displaystring = String(buf);
     updateDisplayValue();
 }
-void gotTouchEvent()
+void gotTouchEvent() // ISR for touch input. Toggles touchActive state and updates the threshold direction for the next interrupt.
 {
     if (lastTouchActive != testingLower)
     {
@@ -1096,65 +1119,83 @@ void gotTouchEvent()
     }
 }
 
-void handleTouchEvent() {
-    #define GRACE_MS 50             // Time to wait after any switch change before evaluating states
-    #define RELEASE_COOLDOWN_MS 500 // Ignore individual sw_5 and sw_6 for 500ms after D_555 ends
+void handleTouchEvent()
+{                               // Handle touch events, including debouncing and computing effective touch state based on switch states for the 1092D/1092A emulation.
+#define GRACE_MS 50             // Time to wait after any switch change before evaluating states
+#define RELEASE_COOLDOWN_MS 500 // Ignore individual sw_5 and sw_6 for 500ms after D_555 ends
     bool computedTouchActive = false;
     bool effectiveTouchActive = false;
     static unsigned long lastChangeTime = 0;
     static unsigned long lastD555EndTime = 0;
     static bool prevComputed = true;
-    static bool sw_6_changed_last = false; //track if sw_6 changed during this cycle
+    static bool sw_6_changed_last = false; // track if sw_6 changed during this cycle
 
     if (clockemulation == WIFI)
     {
         // 1092D touch logic - the 555 changes sw_2 AND sw_5 to HIGH sw_6 to LOW when touched
         // 1092A touch logic - the 555 changes either sw_5 or sw_6 to HIGH when touched depending on bottom switch
-        if (sw_2.changed || sw_5.changed || sw_6.changed) {
-            //Serial.println("Switch change detected: sw2:" + String(sw_2.changed) + " sw5:" + String(sw_5.changed) + " sw6:" + String(sw_6.changed));
-            //Serial.println("                States: sw2:" + String(sw_2.state) + " sw5:" + String(sw_5.state) + " sw6:" + String(sw_6.state));
-            if (sw_6.changed) sw_6_changed_last = true;
+        if (sw_2.changed || sw_5.changed || sw_6.changed)
+        {
+            // Serial.println("Switch change detected: sw2:" + String(sw_2.changed) + " sw5:" + String(sw_5.changed) + " sw6:" + String(sw_6.changed));
+            // Serial.println("                States: sw2:" + String(sw_2.state) + " sw5:" + String(sw_5.state) + " sw6:" + String(sw_6.state));
+            if (sw_6.changed)
+                sw_6_changed_last = true;
             lastChangeTime = millis();
         }
         bool D_555 = (sw_2.state && sw_5.state);
-        if ((millis() - lastChangeTime) >= GRACE_MS) {  // After GRACE_MS, evaluate stable states
+        if ((millis() - lastChangeTime) >= GRACE_MS)
+        { // After GRACE_MS, evaluate stable states
             bool Others = ((sw_6_changed_last && sw_6.state) || sw_5.state);
-            if (D_555) {
+            if (D_555)
+            {
                 computedTouchActive = true; // D_555 wins
-            } else {
-                if ((millis() - lastD555EndTime) >= RELEASE_COOLDOWN_MS) {  // Check cooldown after D_555 release
+            }
+            else
+            {
+                if ((millis() - lastD555EndTime) >= RELEASE_COOLDOWN_MS)
+                { // Check cooldown after D_555 release
                     computedTouchActive = Others;
-                } else {
+                }
+                else
+                {
                     computedTouchActive = false; // Block Others during cooldown
-                    if (Others) {
+                    if (Others)
+                    {
                         Serial.println("Others asserted");
                     }
                 }
             }
-        } else {
+        }
+        else
+        {
             computedTouchActive = false; // Still in grace period
         }
         static bool wasD555 = false;
-        if (!D_555 && wasD555) {
+        if (!D_555 && wasD555)
+        {
             lastD555EndTime = millis();
-            sw_6_changed_last = false; 
+            sw_6_changed_last = false;
         }
         wasD555 = D_555;
-        if (computedTouchActive != prevComputed) {
+        if (computedTouchActive != prevComputed)
+        {
             prevComputed = computedTouchActive;
         }
-        effectiveTouchActive = touchActive || computedTouchActive ;
-    } else effectiveTouchActive = touchActive;
-    
-    if (lastTouchActive != effectiveTouchActive) {
+        effectiveTouchActive = touchActive || computedTouchActive;
+    }
+    else
+        effectiveTouchActive = touchActive;
+
+    if (lastTouchActive != effectiveTouchActive)
+    {
         lastTouchActive = effectiveTouchActive;
         computedTouchActive = false;
-        if (effectiveTouchActive) gotevent = true;
-    } 
-    
+        if (effectiveTouchActive)
+            gotevent = true;
+    }
 }
 
-void CheckSwitches()
+void CheckSwitches() // Poll the switch states and debounce them. This function is called in the main loop to read the physical switch states and update the debounced state for each switch.
 {
     bool KA = digitalRead(pinKA);
     bool KB = digitalRead(pinKB);
@@ -1180,8 +1221,6 @@ void CheckSwitches()
         debounceSwitch(sw_7, KA, now);
     }
 
-       
-
     // --- 60Hz presence check ---
     static bool lastRead = false;
     static uint32_t lastTransition = 0;
@@ -1201,7 +1240,7 @@ void CheckSwitches()
     debounceSwitch(sw_HOLD, rawHz, now);
 }
 
-bool debounceSwitch(DebouncedSwitch &sw, bool raw, uint32_t nowMicros)
+bool debounceSwitch(DebouncedSwitch &sw, bool raw, uint32_t nowMicros) // Debounce switch input.
 {
     sw.changed = false;
 
@@ -1224,7 +1263,8 @@ bool debounceSwitch(DebouncedSwitch &sw, bool raw, uint32_t nowMicros)
     return sw.changed;
 }
 
-void DispatchSwitches()
+void DispatchSwitches() // Handle switch events and dispatch actions based on the current state of the switches.
+// Switch mapping for reference:
 // sw_1 - Time Set
 // sw_2 - Alarm Set / Date Set
 // sw_3 - Hour / Month Increment
@@ -1234,14 +1274,16 @@ void DispatchSwitches()
 // sw_7 - 12/24 Hour Mode (1092 only)
 // sw_HOLD - Hold (1092 only) emulated
 {
-    if (sw_1.changed && sw_1.state){
+    if (sw_1.changed && sw_1.state)
+    {
         ResetOn3xTimeSet();
     }
     if ((sw_2.changed && sw_2.state) && !ArduinoOTAEnabled && !otaModeActive)
-        {
+    {
         ArduinoOTAEnabled = true;
     }
-    if (clockemulation == MK5017){
+    if (clockemulation == MK5017)
+    {
         if (sw_1.changed && sw_1.state)
         {
             handleSetMode(EDIT_TIME);
@@ -1263,7 +1305,7 @@ void DispatchSwitches()
         {
             handleSetMode(EDIT_TIMELIVE);
         }
-        if  (sw_5.changed && (clockmodel != (MODEL_GC_1092D || MODEL_BOGUS)))
+        if (sw_5.changed && (clockmodel != (MODEL_GC_1092D || MODEL_BOGUS)))
         {
             requestSnooze(); // state machine will handle transition
         }
@@ -1275,13 +1317,14 @@ void DispatchSwitches()
                 alarmEnabled = sw_6.state;
                 if (!sw_6.state)
                     alarmToneStop();
-                //Serial.println(alarmEnabled ? "alarmEnabled ON" : "alarmEnabled OFF");
+                // Serial.println(alarmEnabled ? "alarmEnabled ON" : "alarmEnabled OFF");
             }
             else
-            {        
-                autoDate = !sw_6.state; 
-                if (!sw_2.state){
-                currentDisplayMode = MODE_TIME;   
+            {
+                autoDate = !sw_6.state;
+                if (!sw_2.state)
+                {
+                    currentDisplayMode = MODE_TIME;
                 }
             }
         }
@@ -1301,7 +1344,7 @@ void DispatchSwitches()
             handleSetMode(EDIT_TIME);
         }
     }
-    
+
     // Keep handling edit mode updates/exit
     if (inEditMode)
     {
@@ -1309,7 +1352,7 @@ void DispatchSwitches()
     }
 }
 
-void loadPrefs()
+void loadPrefs() // Load preferences from NVS (non-volatile storage) and initialize configuration variables. If preferences are not found, default values are used.
 {
     clockemulation = static_cast<Emulation>(prefs.getUChar("clockemulation", static_cast<uint8_t>(defaultEmulation)));
     clockmodel = static_cast<Model>(prefs.getUChar("clockmodel", static_cast<uint8_t>(defaultModel)));
@@ -1331,87 +1374,99 @@ void loadPrefs()
     Serial.println("weekendDay2: " + weekendDay2);
     Serial.println("ntpserver: " + ntpserver);
     Serial.println("localTzPosix: " + localTzPosix);
-    Serial.println("UseCPStartup: " + String(UseCPStartup ? "true" : "false") );
+    Serial.println("UseCPStartup: " + String(UseCPStartup ? "true" : "false"));
 }
 
-void savePrefs(Emulation emu, Model model)
+void savePrefs(Emulation emu, Model model) // Save preferences to NVS (non-volatile storage)
 {
     clockemulation = emu;
     clockmodel = model;
     prefs.putUChar("clockemulation", static_cast<uint8_t>(emu));
     prefs.putUChar("clockmodel", static_cast<uint8_t>(model));
-    
 }
 
-void saveCPChanges() //WifiManager callback to set flag
+void saveCPChanges() // Save the Captive Portal change flag to NVS (non-volatile storage) to indicate that a change has occurred in the Captive Portal settings.
 {
     Serial.println("Setting Captive Portal change flag");
     CP_Changes = true;
 }
 
-void monitorAndRecoverNtp() {
+void monitorAndRecoverNtp() // Monitor NTP synchronization status and attempt recovery if the time is stale or not set.
+{ 
+    
     static unsigned long lastCheck = 0;
-    static unsigned long timeNotSetStart = 0; 
+    static unsigned long timeNotSetStart = 0;
     static bool timeoutTrackerActive = false; // Ensures logs print only once
 
     // --- 1. INITIAL BOOT TIMEOUT (TIME NEVER SET) ---
-    if (timeStatus() == timeNotSet) {
-        if (!timeoutTrackerActive) {
-            timeNotSetStart = millis(); 
+    if (timeStatus() == timeNotSet)
+    {
+        if (!timeoutTrackerActive)
+        {
+            timeNotSetStart = millis();
             timeoutTrackerActive = true;
             Serial.println("Time not set yet.");
             currentDisplayMode = MODE_MESSAGE;
             messageindex = 8; // Show dashes on the desk clock
             updateDisplayValue();
         }
-        
+
         // Custom threshold for initial boot (e.g., 30 seconds)
-        const unsigned long CAPTIVE_PORTAL_TIMEOUT_MS = 60000; 
-        
-        if (millis() - timeNotSetStart > CAPTIVE_PORTAL_TIMEOUT_MS) {
+        const unsigned long CAPTIVE_PORTAL_TIMEOUT_MS = 60000;
+
+        if (millis() - timeNotSetStart > CAPTIVE_PORTAL_TIMEOUT_MS)
+        {
             Serial.println("Time sync failed. Launching Captive Portal...");
-            
+
             currentDisplayMode = MODE_MESSAGE;
             messageindex = 8; // Show dashes on the desk clock
             updateDisplayValue();
             // Change to set prefs flag to boot to CP ;
             prefs.putBool("UseCPStartup", 1);
             ESP.restart();
-            return; 
+            return;
         }
         return; // Halt further checks; cannot evaluate stale time yet
-    } else {
+    }
+    else
+    {
         // Clear trackers instantly once a valid baseline time anchor is found
         timeoutTrackerActive = false;
-        timeNotSetStart = 0; 
+        timeNotSetStart = 0;
     }
 
     // --- 2. STANDARD STALE TIME RECOVERY (INTERVAL DRIVEN) ---
-    if (millis() - lastCheck < ntpinterval * 1000) return;
+    if (millis() - lastCheck < ntpinterval * 1000)
+        return;
     lastCheck = millis();
 
     time_t nowTime = now();
     time_t lastNtp = lastNtpUpdateTime();
 
-    if ((nowTime - lastNtp) > (ntpinterval * 3)) {
+    if ((nowTime - lastNtp) > (ntpinterval * 3))
+    {
         Serial.println("NTP stale. Attempting resync...");
         currentDisplayMode = MODE_MESSAGE;
         messageindex = 8; // Dashes
         updateDisplayValue();
 
         // Strict blocking recovery sequence
-        if (!waitForSync(5)) {
+        if (!waitForSync(5))
+        {
             Serial.println("Resync failed. Restarting WiFi...");
             WiFi.disconnect();
             WiFi.mode(WIFI_OFF);
-            delay(1000); 
+            delay(1000);
             WiFi.mode(WIFI_STA);
             WiFi.begin();
 
-            if (!waitForSync(10)) {
+            if (!waitForSync(10))
+            {
                 Serial.println("Still no NTP. Rebooting...");
                 ESP.restart();
-            } else {
+            }
+            else
+            {
                 currentDisplayMode = MODE_TIME;
                 Serial.println("NTP resynced successfully.");
             }
@@ -1419,27 +1474,28 @@ void monitorAndRecoverNtp() {
     }
 }
 
-void checkOtaTimeout()
+void checkOtaTimeout() // Check if OTA mode has exceeded the timeout duration and revert to STA mode if necessary.
 {
     if (otaModeActive && millis() - otaStartTime > otaTimeout)
     {
         Serial.println("OTA timeout exceeded. Reverting to STA mode...");
         WiFi.softAPdisconnect(true); // Shut down OTA AP
-        if (clockemulation == WIFI){
-            WiFi.mode(WIFI_STA);         // Return to station mode
-            WiFi.begin();                // Reconnect using stored credentials
+        if (clockemulation == WIFI)
+        {
+            WiFi.mode(WIFI_STA); // Return to station mode
+            WiFi.begin();        // Reconnect using stored credentials
         }
-        otaModeActive = false;       // Reset OTA mode flag
+        otaModeActive = false; // Reset OTA mode flag
     }
 }
 
-void configModeCallback(WiFiManager *myWiFiManager)
+void configModeCallback(WiFiManager *myWiFiManager) // Wifimanager callback function that is called when the device enters configuration mode (AP mode). It stops Bluetooth if enabled, updates the display to indicate setup mode, and prints the setup IP address and SSID to the serial console.
 {
-    #if USE_BT
-    STOP_BT();   // Stop Bluetooth before AP mode starts
-    #endif
+#if USE_BT
+    STOP_BT(); // Stop Bluetooth before AP mode starts
+#endif
 
-    Serial.println("Entered setup mode:" );
+    Serial.println("Entered setup mode:");
     // Setup display
     currentDisplayMode = MODE_MESSAGE;
     messageindex = 6; // Setup
@@ -1451,7 +1507,7 @@ void configModeCallback(WiFiManager *myWiFiManager)
     Serial.println(myWiFiManager->getConfigPortalSSID());
 }
 
-void keepRTCinsync()
+void keepRTCinsync() // Set time from RTC to ezTime
 {
     DateTime rtcnow = rtc.now();
     DateTime BatteryDead = rtc.now() + TimeSpan(0, BatteryBackup, 0, 0);
@@ -1464,10 +1520,9 @@ void keepRTCinsync()
     Serial.println("ezTime synced from RTC");
     Serial.println("RTC Time: " + String(rtcnow.hour()) + ':' + String(rtcnow.minute()) + ':' + String(rtcnow.second()));
     Serial.println("ezTime: " + String(tz.dateTime(is24HourMode ? "His" : "his")));
-
 }
 
-void setupConfigInit()
+void setupConfigInit() // Perform initial setup configuration, including checking for startup switch conditions to change emulation mode and saving preferences accordingly.
 {
     // Startup switch check - H switch to change Mode
     delay(1000);
@@ -1502,12 +1557,13 @@ void setupConfigInit()
     }
 }
 
-void setupEmulationInit()
+void setupEmulationInit() // Perform setup initialization based on the selected emulation mode (MK5017 or WIFI)
 {
     // Main setup section for MK5017
     if (clockemulation == MK5017)
     {
-        if (clockmodel == MODEL_BOGUS) return; // Wait for model set
+        if (clockmodel == MODEL_BOGUS)
+            return; // Wait for model set
         // Disable eztime sync
         tz.setPosix(F("UTC"));
         setInterval(0);
@@ -1522,7 +1578,6 @@ void setupEmulationInit()
             Serial.println("RTC found");
             DateTime rtcnow = rtc.now();
             DateTime alarm2 = rtc.getAlarm2();
-            
 
             DateTime alarmCompare(
                 rtcnow.year(),
@@ -1530,13 +1585,12 @@ void setupEmulationInit()
                 alarm2.day(),
                 alarm2.hour(),
                 alarm2.minute(),
-                0
-            );
-            //uint32_t nowS = (uint32_t)rtcnow.hour() * 3600 + (uint32_t)rtcnow.minute() * 60 + (uint32_t)rtcnow.second();
-            //uint32_t alarmS = (uint32_t)alarm2.hour() * 3600 + (uint32_t)alarm2.minute() * 60 + (uint32_t)alarm2.second();
-            //if (nowS <= alarmS)
+                0);
+            // uint32_t nowS = (uint32_t)rtcnow.hour() * 3600 + (uint32_t)rtcnow.minute() * 60 + (uint32_t)rtcnow.second();
+            // uint32_t alarmS = (uint32_t)alarm2.hour() * 3600 + (uint32_t)alarm2.minute() * 60 + (uint32_t)alarm2.second();
+            // if (nowS <= alarmS)
             if (rtcnow <= alarmCompare)
-            
+
             {
                 Serial.println("RTC had good data...seeding from RTC");
                 tz.setTime(rtcnow.hour(), rtcnow.minute(), rtcnow.second(),
@@ -1562,13 +1616,13 @@ void setupEmulationInit()
                 rtc.adjust(DateTime(CurrentYear, 1, 1, 0, 0, 0));
                 currentDisplayMode = MODE_MESSAGE;
                 messageindex = 7; // eights
-                //handleSetMode(EDIT_TIME);
+                // handleSetMode(EDIT_TIME);
             }
         }
     }
     // Main setup section for WIFI
     if (clockemulation == WIFI)
-    {   
+    {
         Disable_swHOLD = true;
         currentDisplayMode = MODE_MESSAGE;
         messageindex = 4; // Start
@@ -1591,7 +1645,7 @@ void setupEmulationInit()
     }
     ArduinoOTA
         .onStart([]()
-                    {
+                 {
     String type;
     if (ArduinoOTA.getCommand() == U_FLASH)
         type = "sketch";
@@ -1601,20 +1655,20 @@ void setupEmulationInit()
     // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
     Serial.println("Start updating " + type); })
         .onEnd([]()
-                { Serial.println("\nEnd"); })
+               { Serial.println("\nEnd"); })
         .onProgress([](unsigned int progress, unsigned int total)
                     { Serial.printf("Progress: %u%%\r", (progress / (total / 100))); })
         .onError([](ota_error_t error)
-                    {
+                 {
     Serial.printf("Error[%u]: ", error);
     if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
     else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
     else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
     else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
-    else if (error == OTA_END_ERROR) Serial.println("End Failed"); });   
+    else if (error == OTA_END_ERROR) Serial.println("End Failed"); });
 }
 
-void updateAlarm()
+void updateAlarm() // Update the alarm state machine based on the current time, alarm settings, and user interactions. This function manages transitions between idle, armed, sounding, and snooze states of the alarm.
 {
     switch (alarmState)
     {
@@ -1671,7 +1725,7 @@ void updateAlarm()
     }
 }
 
-void requestSnooze()
+void requestSnooze() // Handle snooze request when the snooze button is pressed. If the alarm is currently sounding, it stops the alarm tone and sets the snooze target time.
 {
     Serial.println("Snooze");
     if (alarmState == ALARM_SOUNDING)
@@ -1682,7 +1736,7 @@ void requestSnooze()
     }
 }
 
-void alarmToneDriver()
+void alarmToneDriver() // Simple state machine to drive the alarm tone based on the current alarm state and timing. It starts and stops the alarm tone at the top of the second and half-second intervals when the alarm is sounding.
 {
     if (alarmState != ALARM_SOUNDING)
     {
@@ -1703,44 +1757,47 @@ void alarmToneDriver()
     }
 }
 
-void alarmToneInit(void)
+void alarmToneInit(void) // Initialize the RMT peripheral for generating the alarm tone.
 {
-        if (clockmodel != MODEL_GC_1092D) {
-            rmt_config_t cfg = RMT_DEFAULT_CONFIG_TX(RMT_PIN, RMT_CH);
-            cfg.clk_div = 80; // 1 µs ticks
-            cfg.tx_config.idle_output_en = true;
-            cfg.tx_config.idle_level = RMT_IDLE_LEVEL_LOW;
-            cfg.tx_config.carrier_en = false;
-            cfg.tx_config.loop_en = false;
-            rmt_config(&cfg);
-            rmt_driver_install(cfg.channel, 0, 0);
+    if (clockmodel != MODEL_GC_1092D)
+    {
+        rmt_config_t cfg = RMT_DEFAULT_CONFIG_TX(RMT_PIN, RMT_CH);
+        cfg.clk_div = 80; // 1 µs ticks
+        cfg.tx_config.idle_output_en = true;
+        cfg.tx_config.idle_level = RMT_IDLE_LEVEL_LOW;
+        cfg.tx_config.carrier_en = false;
+        cfg.tx_config.loop_en = false;
+        rmt_config(&cfg);
+        rmt_driver_install(cfg.channel, 0, 0);
 
-            int idx = 0;
-            for (int c = 0; c < CYCLES_PER_HALFSECOND; c++)
+        int idx = 0;
+        for (int c = 0; c < CYCLES_PER_HALFSECOND; c++)
+        {
+            for (int i = 0; i < 6; i++)
             {
-                for (int i = 0; i < 6; i++)
-                {
-                    pulse_items[idx].level0 = 1;
-                    pulse_items[idx].duration0 = 16;
-                    pulse_items[idx].level1 = 0;
-                    pulse_items[idx].duration1 = 532;
-                    idx++;
-                }
-                pulse_items[idx].level0 = 0;
-                pulse_items[idx].duration0 = 96;
+                pulse_items[idx].level0 = 1;
+                pulse_items[idx].duration0 = 16;
                 pulse_items[idx].level1 = 0;
-                pulse_items[idx].duration1 = 1;
+                pulse_items[idx].duration1 = 532;
                 idx++;
             }
-        } else {
-            //For 1092D, set pin HIGH to enable 12/24 switch
-            Serial.println("1092D Enable 12/24 Hour Switch");
-            pinMode(RMT_PIN, OUTPUT);
-            digitalWrite(RMT_PIN, HIGH);    
+            pulse_items[idx].level0 = 0;
+            pulse_items[idx].duration0 = 96;
+            pulse_items[idx].level1 = 0;
+            pulse_items[idx].duration1 = 1;
+            idx++;
         }
+    }
+    else
+    {
+        // For 1092D, set pin HIGH to enable 12/24 switch
+        Serial.println("1092D Enable 12/24 Hour Switch");
+        pinMode(RMT_PIN, OUTPUT);
+        digitalWrite(RMT_PIN, HIGH);
+    }
 }
 
-void alarmToneStart(void)
+void alarmToneStart(void) // Start the alarm tone by sending the waveform to the RMT peripheral.
 {
     if (toneActive)
         return;
@@ -1749,7 +1806,7 @@ void alarmToneStart(void)
     toneActive = true;
 }
 
-void alarmToneStop(void)
+void alarmToneStop(void) // Stop the alarm tone by stopping the RMT peripheral and resetting the toneActive flag.
 {
     if (!toneActive)
         return;
@@ -1758,7 +1815,7 @@ void alarmToneStop(void)
     toneActive = false;
 }
 
-void clearRTC()
+void clearRTC() // Clear the RTC (Real-Time Clock) and resets alarms
 {
     rtc.begin();
     DateTime alarm2Time = DateTime(CurrentYear, 1, 1, 00, 00, 00);
@@ -1766,39 +1823,48 @@ void clearRTC()
     rtc.setAlarm2(alarm2Time, DS3231_A2_Date);
 }
 
-void ResetOn3xTimeSet() {
-  static int timeSetCount = 0;
-  static unsigned long startTime = 0;
-  unsigned long now = millis();
+void ResetOn3xTimeSet()
+{ // Reset the device if the time set button is pressed three times within 5 seconds. Resets the model and clears RTC in MK5017 emulation, or reboots to setup in WIFI emulation.
+    static int timeSetCount = 0;
+    static unsigned long startTime = 0;
+    unsigned long now = millis();
 
-  if (timeSetCount == 0) {
-    startTime = now;
-    timeSetCount = 1;
-  } else if (now - startTime <= 5000) {
-    timeSetCount++;
-    Serial.println("timeSetCount: " + String(timeSetCount));
-    if (timeSetCount >= 3) {
-        if (clockemulation == MK5017) {
-            Serial.println("Clearing RTC and resetting model to BOGUS...");
-            clearRTC();
-            savePrefs(clockemulation, MODEL_BOGUS);
-        } else {
-            Serial.println("Rebooting to Setup...");
-            // Set prefs flag
-            prefs.putBool("UseCPStartup",1);
-        }
-        delay(1000);
-        ESP.restart();
+    if (timeSetCount == 0)
+    {
+        startTime = now;
+        timeSetCount = 1;
     }
-  } else {
-    startTime = now;
-    timeSetCount = 1;
-  }
+    else if (now - startTime <= 5000)
+    {
+        timeSetCount++;
+        Serial.println("timeSetCount: " + String(timeSetCount));
+        if (timeSetCount >= 3)
+        {
+            if (clockemulation == MK5017)
+            {
+                Serial.println("Clearing RTC and resetting model to BOGUS...");
+                clearRTC();
+                savePrefs(clockemulation, MODEL_BOGUS);
+            }
+            else
+            {
+                Serial.println("Rebooting to Setup...");
+                // Set prefs flag
+                prefs.putBool("UseCPStartup", 1);
+            }
+            delay(1000);
+            ESP.restart();
+        }
+    }
+    else
+    {
+        startTime = now;
+        timeSetCount = 1;
+    }
 }
 
-
-void ArduinoOTA_begin() {
-    STOP_BT();
+void ArduinoOTA_begin()
+{ // Start OTA mode by stopping Bluetooth, disconnecting WiFi, and starting the OTA service.
     WiFi.disconnect();
     WiFi.mode(WIFI_AP);
     WiFi.softAP(wifiotassid.c_str(), wifiotapass.c_str());
@@ -1808,63 +1874,65 @@ void ArduinoOTA_begin() {
     Serial.println("OTA mode activated");
 }
 
-void setupWifiManager() {
-        char ntpServerBuf[64];
-        char timeBlankingBuf[4];
-        char ontimeBuf[8];
-        char offtimeBuf[8];
-        char weekendDay1Buf[16];
-        char weekendDay2Buf[16];
-        char showdatesecBuf[4];
+void setupWifiManager()
+{ // Setup WiFiManager with custom parameters and HTML for setting Preferences stored in NVS
+    char ntpServerBuf[64];
+    char timeBlankingBuf[4];
+    char ontimeBuf[8];
+    char offtimeBuf[8];
+    char weekendDay1Buf[16];
+    char weekendDay2Buf[16];
+    char showdatesecBuf[4];
 
-        strncpy(ntpServerBuf, ntpserver.c_str(), sizeof(ntpServerBuf) - 1);
-        ntpServerBuf[sizeof(ntpServerBuf) - 1] = '\0';
+    strncpy(ntpServerBuf, ntpserver.c_str(), sizeof(ntpServerBuf) - 1);
+    ntpServerBuf[sizeof(ntpServerBuf) - 1] = '\0';
 
-        snprintf(timeBlankingBuf, sizeof(timeBlankingBuf), "%d", timeBlankingEnabled ? 1 : 0);
+    snprintf(timeBlankingBuf, sizeof(timeBlankingBuf), "%d", timeBlankingEnabled ? 1 : 0);
 
-        strncpy(ontimeBuf, ontime.c_str(), sizeof(ontimeBuf) - 1);
-        ontimeBuf[sizeof(ontimeBuf) - 1] = '\0';
+    strncpy(ontimeBuf, ontime.c_str(), sizeof(ontimeBuf) - 1);
+    ontimeBuf[sizeof(ontimeBuf) - 1] = '\0';
 
-        strncpy(offtimeBuf, offtime.c_str(), sizeof(offtimeBuf) - 1);
-        offtimeBuf[sizeof(offtimeBuf) - 1] = '\0';
+    strncpy(offtimeBuf, offtime.c_str(), sizeof(offtimeBuf) - 1);
+    offtimeBuf[sizeof(offtimeBuf) - 1] = '\0';
 
-        strncpy(weekendDay1Buf, weekendDay1.c_str(), sizeof(weekendDay1Buf) - 1);
-        weekendDay1Buf[sizeof(weekendDay1Buf) - 1] = '\0';
+    strncpy(weekendDay1Buf, weekendDay1.c_str(), sizeof(weekendDay1Buf) - 1);
+    weekendDay1Buf[sizeof(weekendDay1Buf) - 1] = '\0';
 
-        strncpy(weekendDay2Buf, weekendDay2.c_str(), sizeof(weekendDay2Buf) - 1);
-        weekendDay2Buf[sizeof(weekendDay2Buf) - 1] = '\0';
+    strncpy(weekendDay2Buf, weekendDay2.c_str(), sizeof(weekendDay2Buf) - 1);
+    weekendDay2Buf[sizeof(weekendDay2Buf) - 1] = '\0';
 
-        snprintf(showdatesecBuf, sizeof(showdatesecBuf), "%d", showdatesec);
+    snprintf(showdatesecBuf, sizeof(showdatesecBuf), "%d", showdatesec);
 
-        strncpy(timeZoneBuf, localTzPosix.c_str(), sizeof(timeZoneBuf) - 1);
-        timeZoneBuf[sizeof(timeZoneBuf) - 1] = '\0';
+    strncpy(timeZoneBuf, localTzPosix.c_str(), sizeof(timeZoneBuf) - 1);
+    timeZoneBuf[sizeof(timeZoneBuf) - 1] = '\0';
 
-        WiFiManagerParameter customNtp("ntpserver", "NTP Server", ntpServerBuf, sizeof(ntpServerBuf) - 1);
+    WiFiManagerParameter customNtp("ntpserver", "NTP Server", ntpServerBuf, sizeof(ntpServerBuf) - 1);
 
-        // Hidden backing fields so WiFiManager saves the values without showing raw internals
-        WiFiManagerParameter customTimeZoneValue("timeZone", "", timeZoneBuf, sizeof(timeZoneBuf) - 1, "type=\"hidden\"");
-        WiFiManagerParameter customBlankingValue("timeBlankingEnabled", "", timeBlankingBuf, sizeof(timeBlankingBuf) - 1, "type=\"hidden\"");
-        WiFiManagerParameter customOnTimeValue("ontime", "", ontimeBuf, sizeof(ontimeBuf) - 1, "type=\"hidden\"");
-        WiFiManagerParameter customOffTimeValue("offtime", "", offtimeBuf, sizeof(offtimeBuf) - 1, "type=\"hidden\"");
-        WiFiManagerParameter customWeekend1Value("weekendDay1", "", weekendDay1Buf, sizeof(weekendDay1Buf) - 1, "type=\"hidden\"");
-        WiFiManagerParameter customWeekend2Value("weekendDay2", "", weekendDay2Buf, sizeof(weekendDay2Buf) - 1, "type=\"hidden\"");
+    // Hidden backing fields so WiFiManager saves the values without showing raw internals
+    WiFiManagerParameter customTimeZoneValue("timeZone", "", timeZoneBuf, sizeof(timeZoneBuf) - 1, "type=\"hidden\"");
+    WiFiManagerParameter customBlankingValue("timeBlankingEnabled", "", timeBlankingBuf, sizeof(timeBlankingBuf) - 1, "type=\"hidden\"");
+    WiFiManagerParameter customOnTimeValue("ontime", "", ontimeBuf, sizeof(ontimeBuf) - 1, "type=\"hidden\"");
+    WiFiManagerParameter customOffTimeValue("offtime", "", offtimeBuf, sizeof(offtimeBuf) - 1, "type=\"hidden\"");
+    WiFiManagerParameter customWeekend1Value("weekendDay1", "", weekendDay1Buf, sizeof(weekendDay1Buf) - 1, "type=\"hidden\"");
+    WiFiManagerParameter customWeekend2Value("weekendDay2", "", weekendDay2Buf, sizeof(weekendDay2Buf) - 1, "type=\"hidden\"");
 
-        auto hhmmFromHhmmss = [](const String& s) -> String {
-            if (s.length() >= 4) {
-                String hh = s.substring(0, 2);
-                String mm = s.substring(2, 4);
-                return hh + ":" + mm;
-            }
-            return "08:00";
-        };
+    auto hhmmFromHhmmss = [](const String &s) -> String
+    {
+        if (s.length() >= 4)
+        {
+            String hh = s.substring(0, 2);
+            String mm = s.substring(2, 4);
+            return hh + ":" + mm;
+        }
+        return "08:00";
+    };
 
-        String ontimeHHMM = hhmmFromHhmmss(ontime);
-        String offtimeHHMM = hhmmFromHhmmss(offtime);
+    String ontimeHHMM = hhmmFromHhmmss(ontime);
+    String offtimeHHMM = hhmmFromHhmmss(offtime);
 
+    String settingsHtml;
 
-        String settingsHtml;
-
-        settingsHtml += R"rawliteral(
+    settingsHtml += R"rawliteral(
         <div style='margin-bottom:12px;'>
         <label for='tzSelect' style='display:block; font-weight:bold; margin-bottom:4px;'>Time zone</label>
         <select id='tzSelect' style='width:100%;'>
@@ -1990,23 +2058,23 @@ void setupWifiManager() {
 
             var onUi = document.getElementById("onTimeUi");
             if (onUi) onUi.value = ')rawliteral";
-        settingsHtml += ontimeHHMM;
-        settingsHtml += R"rawliteral(';
+    settingsHtml += ontimeHHMM;
+    settingsHtml += R"rawliteral(';
 
             var offUi = document.getElementById("offTimeUi");
             if (offUi) offUi.value = ')rawliteral";
-        settingsHtml += offtimeHHMM;
-        settingsHtml += R"rawliteral(';
+    settingsHtml += offtimeHHMM;
+    settingsHtml += R"rawliteral(';
 
             var w1 = document.getElementById("weekendDay1Ui");
             if (w1) w1.value = ')rawliteral";
-        settingsHtml += String(weekendDay1Buf);
-        settingsHtml += R"rawliteral(';
+    settingsHtml += String(weekendDay1Buf);
+    settingsHtml += R"rawliteral(';
 
             var w2 = document.getElementById("weekendDay2Ui");
             if (w2) w2.value = ')rawliteral";
-        settingsHtml += String(weekendDay2Buf);
-        settingsHtml += R"rawliteral(';
+    settingsHtml += String(weekendDay2Buf);
+    settingsHtml += R"rawliteral(';
 
             if (tzSelect) tzSelect.addEventListener("change", syncValues);
             if (blankCheckbox) {
@@ -2027,66 +2095,66 @@ void setupWifiManager() {
         </script>
         )rawliteral";
 
-        WiFiManagerParameter customSettingsHtml(settingsHtml.c_str());
+    WiFiManagerParameter customSettingsHtml(settingsHtml.c_str());
 
-        wifiManager.setHostname(wifihostname);
-        WiFi.mode(WIFI_STA);
+    wifiManager.setHostname(wifihostname);
+    WiFi.mode(WIFI_STA);
 
+    wifiManager.addParameter(&customNtp);
+    wifiManager.addParameter(&customTimeZoneValue);
+    wifiManager.addParameter(&customBlankingValue);
+    wifiManager.addParameter(&customOnTimeValue);
+    wifiManager.addParameter(&customOffTimeValue);
+    wifiManager.addParameter(&customWeekend1Value);
+    wifiManager.addParameter(&customWeekend2Value);
+    wifiManager.addParameter(&customSettingsHtml);
 
-        wifiManager.addParameter(&customNtp);
-        wifiManager.addParameter(&customTimeZoneValue);
-        wifiManager.addParameter(&customBlankingValue);
-        wifiManager.addParameter(&customOnTimeValue);
-        wifiManager.addParameter(&customOffTimeValue);
-        wifiManager.addParameter(&customWeekend1Value);
-        wifiManager.addParameter(&customWeekend2Value);
-        wifiManager.addParameter(&customSettingsHtml);
+    // Set callback when entering AP mode
+    wifiManager.setAPCallback(configModeCallback);
+    wifiManager.setConfigPortalTimeout(180);
 
-        // Set callback when entering AP mode
-        wifiManager.setAPCallback(configModeCallback);
-        wifiManager.setConfigPortalTimeout(180);
-
-        // Register callback for pressing Save
-        wifiManager.setSaveParamsCallback(saveCPChanges);
-        wifiManager.setWebServerCallback([]() {
-            wifiManager.server->on("/", []() {
+    // Register callback for pressing Save
+    wifiManager.setSaveParamsCallback(saveCPChanges);
+    wifiManager.setWebServerCallback([]()
+                                     { wifiManager.server->on("/", []()
+                                                              {
             wifiManager.server->sendHeader("Location", "/wifi", true);
-            wifiManager.server->send(302, "text/plain", "");
-            });
-        });
+            wifiManager.server->send(302, "text/plain", ""); }); });
 
-        // Testing: Forcibly reset wifi and/or prefs settings for testing
-        // wifiManager.resetSettings();
-        // prefs.clear();
-        
-        
-      
-        // Disable OTA menus in wifimanager
-        std::vector<const char *> menu = {"wifi", "info", "restart", "exit"};
-        wifiManager.setMenu(menu);
-        wifiManager.setBreakAfterConfig(true);
-        if (UseCPStartup == 1){
-            // Clear prefs flag
-            UseCPStartup = 0;
-            prefs.putBool("UseCPStartup", 0);
-            wifiManager.startConfigPortal(wifisetupssid.c_str());
-        } else if (!wifiManager.autoConnect(wifisetupssid.c_str())) {
-            Serial.println("failed to connect and hit timeout");
-            ESP.restart();
-            delay(1000);
-        }
+    // Testing: Forcibly reset wifi and/or prefs settings for testing
+    // wifiManager.resetSettings();
+    // prefs.clear();
 
-        Serial.println("Initial Connect");
-        if (CP_Changes == true) { 
+    // Disable OTA menus in wifimanager
+    std::vector<const char *> menu = {"wifi", "info", "restart", "exit"};
+    wifiManager.setMenu(menu);
+    wifiManager.setBreakAfterConfig(true);
+    if (UseCPStartup == 1)
+    {
+        // Clear prefs flag
+        UseCPStartup = 0;
+        prefs.putBool("UseCPStartup", 0);
+        wifiManager.startConfigPortal(wifisetupssid.c_str());
+    }
+    else if (!wifiManager.autoConnect(wifisetupssid.c_str()))
+    {
+        Serial.println("failed to connect and hit timeout");
+        ESP.restart();
+        delay(1000);
+    }
+
+    Serial.println("Initial Connect");
+    if (CP_Changes == true)
+    {
         // Extracting settings from payload
         ntpserver = String(customNtp.getValue());
         localTzPosix = String(customTimeZoneValue.getValue());
         timeBlankingEnabled = atoi(customBlankingValue.getValue()) != 0;
-        ontime = String(customOnTimeValue.getValue());       // HHMMSS
-        offtime = String(customOffTimeValue.getValue());     // HHMMSS
+        ontime = String(customOnTimeValue.getValue());   // HHMMSS
+        offtime = String(customOffTimeValue.getValue()); // HHMMSS
         weekendDay1 = String(customWeekend1Value.getValue());
         weekendDay2 = String(customWeekend2Value.getValue());
-            
+
         Serial.println("Handling Captive Portal change flag");
         prefs.putUChar("timeBlanking", timeBlankingEnabled ? 1 : 0);
         prefs.putString("ontime", ontime);
@@ -2095,7 +2163,7 @@ void setupWifiManager() {
         prefs.putString("weekendDay2", weekendDay2);
         prefs.putString("ntpserver", ntpserver);
         prefs.putString("timeZone", localTzPosix);
-        
+
         Serial.println("=== Config Saved to NVS ===");
         Serial.println("timeBlanking: " + String(timeBlankingEnabled ? "true" : "false"));
         Serial.println("ontime: " + ontime);
@@ -2107,10 +2175,11 @@ void setupWifiManager() {
         loadPrefs(); // reload to apply any changes to runtime variables
         setServer(ntpserver);
         tz.setPosix(localTzPosix.c_str());
-        if (!wifiManager.autoConnect(wifisetupssid.c_str())) {
-                Serial.println("failed to connect and hit timeout");
-                ESP.restart();
-                delay(1000);
-            }
+        if (!wifiManager.autoConnect(wifisetupssid.c_str()))
+        {
+            Serial.println("failed to connect and hit timeout");
+            ESP.restart();
+            delay(1000);
         }
+    }
 }
