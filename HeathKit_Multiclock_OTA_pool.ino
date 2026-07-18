@@ -33,6 +33,7 @@ GC-1092A/D - Original 555 touch hardware can be used, however each touch event m
 MK5017 mode:
 Switches and all behavior faithful to original hardware
 RTC simulates battery backup of the GC-1092A/D (but works on all models) - Will consider time valid for configurable number of hours.
+Note some RTC modules don't keep time when powered off. Set BatteryBackup to 0 to disable holdover.
 Switching modes will reset the model. Set model by pressing Hour/Month switch until the correct model is displayed, then toggle Time Set.
 
 Switching modes:
@@ -1510,6 +1511,7 @@ void configModeCallback(WiFiManager *myWiFiManager) // Wifimanager callback func
 void keepRTCinsync() // Set time from RTC to ezTime
 {
     DateTime rtcnow = rtc.now();
+    if (BatteryBackup == 0 ) { BatteryBackup = -1; } // Set alarm for an hour ago
     DateTime BatteryDead = rtc.now() + TimeSpan(0, BatteryBackup, 0, 0);
     rtc.setAlarm2(BatteryDead, DS3231_A2_Date);
     rtc.clearAlarm(2);
@@ -1759,7 +1761,7 @@ void alarmToneDriver() // Simple state machine to drive the alarm tone based on 
 
 void alarmToneInit(void) // Initialize the RMT peripheral for generating the alarm tone.
 {
-    if (clockmodel != MODEL_GC_1092D)
+    if (clockmodel != MODEL_GC_1092D) 
     {
         rmt_config_t cfg = RMT_DEFAULT_CONFIG_TX(RMT_PIN, RMT_CH);
         cfg.clk_div = 80; // 1 µs ticks
