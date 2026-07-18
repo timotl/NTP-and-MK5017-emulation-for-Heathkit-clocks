@@ -1,0 +1,17 @@
+Parts:
+ESP32 - any 38 pin module (NodeMCU etc)
+Power supply https://www.digikey.com/en/products/detail/mean-well-usa-inc/IRM-10-5/7704657
+
+DIP plug https://www.digikey.com/en/products/detail/assmann-wsw-components/ADIP-24Z-LC/924324
+DS3231 module https://www.digikey.com/en/products/detail/seeed-technology-co-ltd/101990005/5487769
+IDC socket and cable or directly solder ribbon.
+
+U2, U3 HC595
+U4,5,6 4504
+
+R1 100k
+R2 20k
+R3 100k
+R4 20k
+R5 47k
+R6 20k
