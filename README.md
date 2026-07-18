@@ -22,6 +22,7 @@ GC-1092A/D - Original 555 touch hardware can be used, however each touch event m
 MK5017 mode:
 Switches and all behavior faithful to original hardware
 RTC simulates battery backup of the GC-1092A/D (but works on all models) - Will consider time valid for configurable number of hours.
+Note: some RTC modules don't keep time when powered off. Set BatteryBackup to 0 to disable holdover.
 Switching modes will reset the model. Set model by pressing Hour/Month switch until the correct model is displayed, then toggle Time Set.
 
 Switching modes:
