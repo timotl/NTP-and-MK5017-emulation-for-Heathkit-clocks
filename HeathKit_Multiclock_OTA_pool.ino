@@ -2,10 +2,9 @@
  Project: MK5017 Replacement
  Description: ESP32 sketch to replace MK5017 used in several HeathKit clocks
  Author: Landon Timothy
- Date: 6.30.2026
+ Date: 7.22.2026
 
  License: MIT License
- Copyright (c) 2026 Landon Timothy
 
  Both the software code in this repository and the accompanying
  hardware design files are open-source.
@@ -31,7 +30,7 @@ ESP Touch (also snooze or alarmoff switches) changes display from Time to Date, 
 GC-1092A/D - Original 555 touch hardware can be used, however each touch event must be at least 5 seconds apart.
 
 MK5017 mode:
-Switches and all behavior faithful to original hardware
+Switches and all behavior faithful to original hardware. RTC module optional.
 RTC simulates battery backup of the GC-1092A/D (but works on all models) - Will consider time valid for configurable number of hours.
 Note some RTC modules don't keep time when powered off. Set BatteryBackup to 0 to disable holdover.
 Switching modes will reset the model. Set model by pressing Hour/Month switch until the correct model is displayed, then toggle Time Set.
@@ -64,6 +63,7 @@ Partition scheme "Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS) required if S
 #include <RTClib.h>
 #include "driver/rmt.h"
 #include "driver/gpio.h"
+#include <driver/pulse_cnt.h>
 
 // Wifi stuff
 // Wifi will revert to setup AP mode if no connection available
@@ -76,13 +76,15 @@ String wifiotapass = "update123";              // OTA AP mode password
 bool CP_Changes = 0;                           // Flag for pending CP changes
 bool UseCPStartup;                             // Flag for CP on startup
 
+#define USE_BT 1                // compile-time switch for BluetoothSerial -- Requires partition scheme "Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS)"
+
 int ntpinterval = 500;          // NTP update interval
 ezDebugLevel_t ntpdebug = INFO; // ezTime debug level
 RTC_DS3231 rtc;                 // RTC instance only for MK5017 emulation mode
 int CurrentYear = 2026;         // RTC Current year seed (1092D MK5017 only) Original hardware does not have a year, but for RTC emulation we have a proper calendar
 int BatteryBackup = 6;          // Hours to consider 'Battery backup' valid
 int showdatesec = 10;           // Seconds to show date when touched
-#define USE_BT 1                // compile-time switch for BluetoothSerial -- Requires partition scheme "Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS)"
+bool RTCPresent = false;        // Automatic flag for RTC presence
 
 // Should not need to change anything below here
 // BT stuff - Replace hardware serial with BluetoothSerial if USE_BT is true
@@ -127,6 +129,8 @@ const uint8_t pinAM = 18;    // AM pin on socket (16)
 #define RMT_PIN GPIO_NUM_19  // Tone pin on socket (20)
 const int sw_HOLD_Pin = 23;  // 60Hz pin on socket (23)
 bool Disable_swHOLD = false; // Disable HOLD function in case hardware issue
+#define PCNT_UNIT          PCNT_UNIT_0
+#define DISCIPLINE_INTERVAL 600000LL // 10 minutes in milliseconds (10 * 60 * 1000)
 
 bool ArduinoOTAEnabled = false;
 
@@ -317,7 +321,7 @@ uint32_t secondEdgeMicros = 0;              // micros at the top-of-second edge
 volatile bool halfSecond = false;           // will be true for one loop iteration when half-second has elapsed since top-of-second
 volatile bool topOfSecond = false;          // will be true for one loop iteration when a new second has started
 bool halfSecondFired = false;
-volatile int lastMinuteSeen = 0;
+volatile int lastMinuteSeen = -1;
 
 // Set Mode Globals
 enum EditTarget
@@ -401,6 +405,9 @@ void alarmToneStart();
 void alarmToneStop();
 void clearRTC();
 void ResetOn3xTimeSet();
+void initPCNT();
+int getAndResetPulseCount();
+void disciplineClock();
 void ArduinoOTA_begin();
 void setupWifiManager();
 // =====================================
@@ -410,6 +417,8 @@ void setup()
     pinMode(RMT_PIN, OUTPUT);   // Make sure Tone pin off as soon as possible
     digitalWrite(RMT_PIN, LOW); // Make sure Tone pin off as soon as possible
     Serial.begin(115200);
+    initPCNT();                 // Initialize pulse counter hardware
+    lastDisciplineTime = millis();
     prefs.begin("mkclock", false);
     loadPrefs();
     pinMode(pinData, OUTPUT);
@@ -747,42 +756,46 @@ void displayTask(void *pvParameters) // Dedicated display task for outputting to
 void handleTimedDispatches() // Handle timed events such as second and half-second updates, minute changes, and alarm timing.
 {
     if (secondChanged())
-    {
-        // Second changed
-        updateDisplayStateIfNeeded();
-        secondEdgeMicros = micros();
-        topOfSecond = true;      // one-loop pulse
-        halfSecondFired = false; // reset for this new second
-        // Keep these up to date for alarm
-        timeSeconds = (uint32_t)tz.hour() * 3600UL + (uint32_t)tz.minute() * 60UL + (uint32_t)tz.second();
-        alarmSeconds = (uint32_t)alarmDT.hour() * 3600UL + (uint32_t)alarmDT.minute() * 60UL + (uint32_t)alarmDT.second();
-
-        // Minute changed: seconds == 0 indicates top of minute
-        if (tz.dateTime("s").toInt() % 60 == 0)
         {
-            int minuteNow = tz.dateTime("i").toInt();
-            // If this minute hasn't been processed yet, call minute handlers
-            if ((minuteNow != lastMinuteSeen) && lastMinuteSeen != 0)
-            {
-                lastMinuteSeen = minuteNow;
+            // Second changed
+            updateDisplayStateIfNeeded();
+            secondEdgeMicros = micros();
+            topOfSecond = true;      // one-loop pulse
+            halfSecondFired = false; // reset for this new second
+            
+            // Keep these up to date for alarm
+            timeSeconds = (uint32_t)tz.hour() * 3600UL + (uint32_t)tz.minute() * 60UL + (uint32_t)tz.second();
+            alarmSeconds = (uint32_t)alarmDT.hour() * 3600UL + (uint32_t)alarmDT.minute() * 60UL + (uint32_t)alarmDT.second();
 
-                // Direct per-5-minute call when minute % 5 == 0
-                if ((minuteNow % 5) == 0)
+            // Check for minute rollover at top of the minute
+            if (tz.second() == 0)
+            {
+                int minuteNow = tz.minute();
+
+                // Fire minute handlers once per minute transition
+                if (minuteNow != lastMinuteSeen)
                 {
-                    if (clockemulation == MK5017)
-                        keepRTCinsync();
+                    lastMinuteSeen = minuteNow;
+
+                    // Every 10 minutes (at :00, :10, :20, :30, :40, :50)
+                    if ((minuteNow % 10) == 0)
+                    {
+                        if (clockemulation == MK5017)
+                        {
+                            disciplineClock();
+                            lastDisciplineTime = millis();
+                            keepRTCinsync();       // Function handles presence or fails quitely
+                        }
+                    }
                 }
             }
-            else
-                lastMinuteSeen++;
         }
-    }
-    uint32_t now = micros();
-    if (!halfSecondFired && (now - secondEdgeMicros) >= HALF_OFFSET_US)
-    {
-        halfSecond = true;      // one-loop pulse
-        halfSecondFired = true; // don’t fire again until next second
-    }
+        uint32_t now = micros();
+        if (!halfSecondFired && (now - secondEdgeMicros) >= HALF_OFFSET_US)
+        {
+            halfSecond = true;      // one-loop pulse
+            halfSecondFired = true; // don’t fire again until next second
+        }
 }
 
 void incrementTime(incrementTimeField field, incrementUpdateType updateType) // Increment time fields (hours, minutes, tens of minutes)
@@ -1017,8 +1030,10 @@ void commitSetMode() // Commit changes made in set mode to the RTC and internal 
         // Update canonical time into tz/rtc
         tz.setTime(hr24, minutes, seconds, dd, mm, CurrentYear);
         // rtc.adjust(DateTime(CurrentYear, 1, 1, hr24, minutes, seconds + 1));
-        rtc.adjust(DateTime(CurrentYear, mm, dd, hr24, minutes, seconds));
-        keepRTCinsync();
+        if (RTCPresent == true) {
+            rtc.adjust(DateTime(CurrentYear, mm, dd, hr24, minutes, seconds));
+            keepRTCinsync();
+        }
         break;
     }
 
@@ -1031,11 +1046,12 @@ void commitSetMode() // Commit changes made in set mode to the RTC and internal 
         // Store as DateTime (date fields are dummy and ignored elsewhere)
         alarmDT = DateTime(CurrentYear, 1, 1, hr24, mn, ss);
         alarmSet = true;
-
-        Serial.println("Committed alarm (HH:MM): " + String(hr24) + ":" + String(mn));
-        rtc.setAlarm1(alarmDT, DS3231_A1_Hour);
-        rtc.clearAlarm(1);
-        rtc.disableAlarm(1);
+        if (RTCPresent == true){
+            Serial.println("Committed alarm (HH:MM): " + String(hr24) + ":" + String(mn));
+            rtc.setAlarm1(alarmDT, DS3231_A1_Hour);
+            rtc.clearAlarm(1);
+            rtc.disableAlarm(1);
+        }
         break;
     }
 
@@ -1057,7 +1073,9 @@ void commitSetMode() // Commit changes made in set mode to the RTC and internal 
             dateSet = true;
             dateChanged = false;
             tz.setTime(h, m, s, dd, mm, CurrentYear);
-            rtc.adjust(DateTime(CurrentYear, mm, dd, h, m, s));
+            if (RTCPresent == true){
+                rtc.adjust(DateTime(CurrentYear, mm, dd, h, m, s));
+            }
             Serial.println("Exit Date set: " + String(displaystring));
         }
         else
@@ -1084,7 +1102,6 @@ void commitSetMode() // Commit changes made in set mode to the RTC and internal 
 
     // Reset edit state
     inEditMode = false;
-    lastMinuteSeen = -1;
     setstring = "";
     currentDisplayMode = MODE_TIME;
     Serial.println("Exited set mode");
@@ -1222,22 +1239,33 @@ void CheckSwitches() // Poll the switch states and debounce them. This function 
         debounceSwitch(sw_7, KA, now);
     }
 
-    // --- 60Hz presence check ---
-    static bool lastRead = false;
-    static uint32_t lastTransition = 0;
-    bool raw = digitalRead(sw_HOLD_Pin);
+    // --- 60Hz presence check (Hardware PCNT) ---
+    static uint32_t lastHzCheckMicros = 0;
+    static int16_t lastPulseCount = 0;
+    static bool hzDetected = false;
 
-    if (raw != lastRead)
+    // Evaluate pulse activity across a 100ms window
+    if (now - lastHzCheckMicros >= 100000)
     {
-        lastRead = raw;
-        lastTransition = now;
+        lastHzCheckMicros = now;
+
+        int16_t currentCount = 0;
+        pcnt_get_counter_value(PCNT_UNIT, &currentCount);
+
+        // Compute delta without resetting the hardware unit
+        int16_t delta = currentCount - lastPulseCount;
+        lastPulseCount = currentCount;
+
+        // Handle counter overflow/wrap (if hardware hits limit)
+        if (delta < 0) {
+            delta += 30000;
+        }
+
+        // 60Hz signal gives ~6 pulses per 100ms; at least 1 pulse means signal is present
+        hzDetected = (delta > 0);
     }
 
-    bool rawHz = ((now - lastTransition) > 100000);
-    if (Disable_swHOLD)
-    {
-        rawHz = false;
-    }
+    bool rawHz = hzDetected && !Disable_swHOLD;
     debounceSwitch(sw_HOLD, rawHz, now);
 }
 
@@ -1508,20 +1536,32 @@ void configModeCallback(WiFiManager *myWiFiManager) // Wifimanager callback func
     Serial.println(myWiFiManager->getConfigPortalSSID());
 }
 
-void keepRTCinsync() // Set time from RTC to ezTime
+void keepRTCinsync() // Synchronize physical RTC from internal ezTime
 {
-    DateTime rtcnow = rtc.now();
-    if (BatteryBackup == 0 ) { BatteryBackup = -1; } // Set alarm for an hour ago
-    DateTime BatteryDead = rtc.now() + TimeSpan(0, BatteryBackup, 0, 0);
-    rtc.setAlarm2(BatteryDead, DS3231_A2_Date);
+    // Skip hardware calls entirely if RTC was not detected during init
+    if (!RTCPresent) {
+        return;
+    }
+
+    // 1. Read current time from internal ezTime instance
+    uint16_t year   = tz.year();
+    uint8_t  month  = tz.month();
+    uint8_t  day    = tz.day();
+    uint8_t  hour   = tz.hour();
+    uint8_t  minute = tz.minute();
+    uint8_t  second = tz.second();
+
+    // 2. Write internal time OUT to the physical RTC chip
+    rtc.adjust(DateTime(year, month, day, hour, minute, second));
+
+    // 3. Update Alarm 2 relative to the newly set time
+    if (BatteryBackup == 0) { 
+        BatteryBackup = -1; // Set alarm for an hour ago
+    }
+    DateTime batteryDead = DateTime(year, month, day, hour, minute, second) + TimeSpan(0, BatteryBackup, 0, 0);
+    rtc.setAlarm2(batteryDead, DS3231_A2_Date);
     rtc.clearAlarm(2);
     rtc.disableAlarm(2);
-    // Set ezTime FROM RTC
-    tz.setTime(rtcnow.hour(), rtcnow.minute(), rtcnow.second(),
-               rtcnow.day(), rtcnow.month(), rtcnow.year());
-    Serial.println("ezTime synced from RTC");
-    Serial.println("RTC Time: " + String(rtcnow.hour()) + ':' + String(rtcnow.minute()) + ':' + String(rtcnow.second()));
-    Serial.println("ezTime: " + String(tz.dateTime(is24HourMode ? "His" : "his")));
 }
 
 void setupConfigInit() // Perform initial setup configuration, including checking for startup switch conditions to change emulation mode and saving preferences accordingly.
@@ -1571,13 +1611,10 @@ void setupEmulationInit() // Perform setup initialization based on the selected 
         setInterval(0);
 
         // Initialize RTC
-        if (!rtc.begin())
-        {
-            Serial.println("RTC not responding");
-        }
-        else
+        if (rtc.begin())
         {
             Serial.println("RTC found");
+            RTCPresent = true;
             DateTime rtcnow = rtc.now();
             DateTime alarm2 = rtc.getAlarm2();
 
@@ -1588,11 +1625,7 @@ void setupEmulationInit() // Perform setup initialization based on the selected 
                 alarm2.hour(),
                 alarm2.minute(),
                 0);
-            // uint32_t nowS = (uint32_t)rtcnow.hour() * 3600 + (uint32_t)rtcnow.minute() * 60 + (uint32_t)rtcnow.second();
-            // uint32_t alarmS = (uint32_t)alarm2.hour() * 3600 + (uint32_t)alarm2.minute() * 60 + (uint32_t)alarm2.second();
-            // if (nowS <= alarmS)
             if (rtcnow <= alarmCompare)
-
             {
                 Serial.println("RTC had good data...seeding from RTC");
                 tz.setTime(rtcnow.hour(), rtcnow.minute(), rtcnow.second(),
@@ -1607,19 +1640,24 @@ void setupEmulationInit() // Perform setup initialization based on the selected 
                 }
                 alarmSet = true;
                 inEditMode = false;
-                lastMinuteSeen = -1;
                 setstring = "";
                 currentDisplayMode = MODE_TIME;
                 updateDisplayStateIfNeeded();
             }
             else
             {
-                Serial.println("RTC had invalid data. Reset time");
+                Serial.println("RTC had invalid or expired data... Reset time");
                 rtc.adjust(DateTime(CurrentYear, 1, 1, 0, 0, 0));
                 currentDisplayMode = MODE_MESSAGE;
                 messageindex = 7; // eights
-                // handleSetMode(EDIT_TIME);
             }
+
+        }  else {
+            Serial.println("No RTC - just reset time");
+            RTCPresent = false;
+            rtc.adjust(DateTime(CurrentYear, 1, 1, 0, 0, 0));
+            currentDisplayMode = MODE_MESSAGE;
+            messageindex = 7; // eights
         }
     }
     // Main setup section for WIFI
@@ -1817,12 +1855,14 @@ void alarmToneStop(void) // Stop the alarm tone by stopping the RMT peripheral a
     toneActive = false;
 }
 
-void clearRTC() // Clear the RTC (Real-Time Clock) and resets alarms
+void clearRTC() // Clear the RTC (after checking it's present) and resets alarms
 {
-    rtc.begin();
-    DateTime alarm2Time = DateTime(CurrentYear, 1, 1, 00, 00, 00);
-    rtc.setAlarm1(alarm2Time, DS3231_A1_Date);
-    rtc.setAlarm2(alarm2Time, DS3231_A2_Date);
+    if (rtc.begin())
+    {
+        DateTime alarm2Time = DateTime(CurrentYear, 1, 1, 00, 00, 00);
+        rtc.setAlarm1(alarm2Time, DS3231_A1_Date);
+        rtc.setAlarm2(alarm2Time, DS3231_A2_Date);
+    }
 }
 
 void ResetOn3xTimeSet()
@@ -1863,6 +1903,75 @@ void ResetOn3xTimeSet()
         startTime = now;
         timeSetCount = 1;
     }
+}
+
+void initPCNT() {
+    pcnt_config_t pcnt_config = {};
+    pcnt_config.pulse_gpio_num = sw_HOLD_Pin; // Pulse input pin
+    pcnt_config.ctrl_gpio_num  = PCNT_PIN_NOT_USED; // No control pin needed
+    pcnt_config.lctrl_mode     = PCNT_MODE_KEEP;     // Keep mode when control signal is low
+    pcnt_config.hctrl_mode     = PCNT_MODE_KEEP;     // Keep mode when control signal is high
+    pcnt_config.pos_mode       = PCNT_COUNT_INC;     // Count up on rising edge
+    pcnt_config.neg_mode       = PCNT_COUNT_DIS;     // Do nothing on falling edge
+    pcnt_config.counter_h_lim  = 30000;              // High limit safeguard
+    pcnt_config.counter_l_lim  = -1;                 // Low limit safeguard
+    pcnt_config.unit           = PCNT_UNIT;
+    pcnt_config.channel        = PCNT_CHANNEL_0;
+
+    // Initialize unit
+    pcnt_unit_config(&pcnt_config);
+
+    // Optional glitch filter: Ignore pulses shorter than ~100us (1000 APB clock cycles at 80MHz = 12.5us)
+    // Values range from 0 to 1023 APB clock cycles (~12.8us max filtering)
+    pcnt_set_filter_value(PCNT_UNIT, 1000);
+    pcnt_filter_enable(PCNT_UNIT);
+
+    // Pause, clear, and resume counter
+    pcnt_counter_pause(PCNT_UNIT);
+    pcnt_counter_clear(PCNT_UNIT);
+    pcnt_counter_resume(PCNT_UNIT);
+}
+
+int getAndResetPulseCount() {
+    int16_t count = 0;
+    pcnt_get_counter_value(PCNT_UNIT, &count);
+    pcnt_counter_clear(PCNT_UNIT);
+    return (int)count;
+}
+
+void disciplineClock() {
+    int pulses = getAndResetPulseCount();
+    
+    // Safety check: 10 mins @ 60 Hz = 36,000 pulses expected. 
+    // Ignore if signal was lost or severely corrupted.
+    if (pulses < 30000 || pulses > 42000) {
+        Serial.printf("[PCNT] Signal drop or anomaly detected (%d pulses). Skipping discipline.\n", pulses);
+        return;
+    }
+
+    // Calculate precise actual elapsed milliseconds from hardware pulse count
+    // 60 pulses = 1000 ms -> ms = pulses * (1000 / 60)
+    double calculated_ms = (double)pulses * (1000.0 / 60.0);
+    
+    // Get current ezTime UTC Unix epoch and fractional milliseconds
+    time_t current_sec = UTC.now();
+    uint16_t current_ms = UTC.ms();
+
+    // Compute drift delta (positive = clock ran slow, negative = clock ran fast)
+    double drift_ms = calculated_ms - (double)DISCIPLINE_INTERVAL;
+
+    // Convert current time to total 64-bit milliseconds, apply drift, and convert back
+    int64_t total_ms = ((int64_t)current_sec * 1000LL) + current_ms + (int64_t)round(drift_ms);
+
+    time_t new_sec = (time_t)(total_ms / 1000LL);
+    uint16_t new_ms = (uint16_t)(total_ms % 1000LL);
+
+    // Update global UTC time (automatically propagates to timezone views like tz.now())
+    UTC.setTime(new_sec, new_ms);
+    
+    // Verbose telemetry output
+    Serial.printf("[PCNT] Pulses: %d | Mains Elapsed: %.2f ms | Drift Offset: %+.2f ms | Resynced UTC\n", 
+                  pulses, calculated_ms, drift_ms);
 }
 
 void ArduinoOTA_begin()
